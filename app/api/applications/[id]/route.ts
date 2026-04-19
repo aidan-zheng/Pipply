@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getApiUser } from "@/lib/supabase/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getLocalDateInputValue } from "@/lib/date-only";
 import {
   APPLICATION_TEXT_LIMITS,
   isWithinTextLimit,
@@ -117,7 +118,7 @@ function buildUpdateAndEvent(
     case "date_applied": {
       const v = value === "" || value == null ? null : String(value);
       return {
-        currentUpdate: { date_applied: v ?? new Date().toISOString().slice(0, 10) },
+        currentUpdate: { date_applied: v ?? getLocalDateInputValue() },
         eventPayload: { ...eventPayload, value_date: v },
       };
     }

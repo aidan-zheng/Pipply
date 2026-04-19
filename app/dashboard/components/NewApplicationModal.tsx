@@ -18,6 +18,7 @@ import {
   APPLICATION_TEXT_LIMITS,
   getLimitedTextValue,
 } from "@/lib/application-field-limits";
+import { getLocalDateInputValue } from "@/lib/date-only";
 import type {
   Application,
   ApplicationStatus,
@@ -41,7 +42,7 @@ const EMPTY_FORM = {
   salary_per_hour: "",
   location_type: "" as LocationType | "",
   location: "",
-  date_applied: new Date().toISOString().slice(0, 10),
+  date_applied: getLocalDateInputValue(),
   contact_person: "",
   status: "applied" as ApplicationStatus,
   notes: "",
@@ -126,8 +127,7 @@ export default function NewApplicationModal({
               : null,
             location_type: form.location_type || null,
             location: form.location.trim() || null,
-            date_applied:
-              form.date_applied || new Date().toISOString().slice(0, 10),
+            date_applied: form.date_applied || getLocalDateInputValue(),
             contact_person: form.contact_person.trim() || null,
             status: form.status,
             notes: form.notes.trim() || null,

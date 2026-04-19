@@ -8,6 +8,7 @@ import {
   APPLICATION_TEXT_LIMITS,
   getLimitedTextValue,
 } from "@/lib/application-field-limits";
+import { formatDateOnly, getLocalDateInputValue } from "@/lib/date-only";
 import type {
   Application,
   ApplicationEmail,
@@ -274,13 +275,11 @@ export default function ApplicationDetails({
       value: app.contact_person || "N/A",
       fieldName: "contact_person",
       label2: "Date Applied",
-      value2: app.date_applied
-        ? new Date(app.date_applied).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          })
-        : "N/A",
+      value2: formatDateOnly(app.date_applied, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
       fieldName2: "date_applied",
     },
     {
@@ -439,7 +438,7 @@ export default function ApplicationDetails({
       if (isEditing) {
         const raw =
           app.date_applied?.slice(0, 10) ||
-          new Date().toISOString().slice(0, 10);
+          getLocalDateInputValue();
         return (
           <div className={styles.fieldEditWrap}>
             <input

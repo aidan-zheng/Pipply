@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getApiUser } from "@/lib/supabase/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getLocalDateInputValue } from "@/lib/date-only";
 import {
   APPLICATION_TEXT_LIMITS,
   isWithinTextLimit,
@@ -48,7 +49,7 @@ const MANUAL_DEFAULTS = {
   salary_per_hour: null as number | null,
   location_type: null as LocationType | null,
   location: null as string | null,
-  date_applied: new Date().toISOString().slice(0, 10),
+  date_applied: getLocalDateInputValue(),
   contact_person: null as string | null,
   status: "applied" as ApplicationStatus,
   notes: null as string | null,
