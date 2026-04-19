@@ -37,7 +37,7 @@ import styles from "./dashboard.module.css";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
 
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -74,10 +74,68 @@ export default function DashboardPage() {
   const [showBulkDeleteApplicationsModal, setShowBulkDeleteApplicationsModal] =
     useState(false);
   const [bulkDeletingApplications, setBulkDeletingApplications] = useState(false);
+  const authUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user: u } }) => setUser(u));
-  }, [supabase.auth]);
+    let isMounted = true;
+
+    function resetDashboardState() {
+      applicationsRef.current = [];
+      emailsRef.current = [];
+      rawEventsRef.current = [];
+      selectedAppRef.current = null;
+      beginRelatedDataRequest();
+      setApplications([]);
+      setSelectedApp(null);
+      setEmails([]);
+      setRawEvents([]);
+      setTimeline([]);
+      setViewingEmail(null);
+      setShowNewModal(false);
+      setShowDeleteModal(false);
+      setEmailsToDelete([]);
+      setShowDeleteEmailsModal(false);
+      setAppsSelectMode(false);
+      setSelectedApplicationIds(new Set());
+      setApplicationsToDelete([]);
+      setShowBulkDeleteApplicationsModal(false);
+      setBulkDeletingApplications(false);
+    }
+
+    supabase.auth.getUser().then(({ data: { user: u } }) => {
+      if (!isMounted) return;
+      authUserIdRef.current = u?.id ?? null;
+      setUser(u);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      const nextUser = session?.user ?? null;
+      const nextUserId = nextUser?.id ?? null;
+      const prevUserId = authUserIdRef.current;
+
+      authUserIdRef.current = nextUserId;
+      setUser(nextUser);
+
+      if (prevUserId === nextUserId) return;
+
+      resetDashboardState();
+
+      if (!nextUserId) {
+        router.replace("/login");
+        router.refresh();
+        return;
+      }
+
+      window.location.reload();
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [router, supabase.auth]);
 
   async function refetchApplications() {
     if (!user) return;
