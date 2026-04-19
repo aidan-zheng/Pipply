@@ -29,6 +29,7 @@ import type {
   ApplicationFieldEvent,
   TimelineEvent,
   ApplicationStatus,
+  LocationType,
 } from "@/types/applications";
 import { STATUS_LABELS, LOCATION_LABELS } from "@/types/applications";
 
@@ -59,7 +60,7 @@ export default function DashboardPage() {
   const [statusFilter, setStatusFilter] = useState<ApplicationStatus | "all">(
     "all",
   );
-  const [locationFilter, setLocationFilter] = useState<string>("all");
+  const [locationFilter, setLocationFilter] = useState<LocationType | "all">("all");
   const [showNewModal, setShowNewModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [viewingEmail, setViewingEmail] = useState<ApplicationEmail | null>(null);
@@ -135,7 +136,7 @@ export default function DashboardPage() {
       valueStr = LOCATION_LABELS[e.value_location_type];
 
     const label = FIELD_LABELS[e.field_name] ?? e.field_name;
-    const val = valueStr || "—";
+    const val = valueStr || "N/A";
     const description = `${label} set to ${val}`;
 
     return {
@@ -763,7 +764,7 @@ export default function DashboardPage() {
             <div className={styles.brandArea}>
               <div className={styles.brand}>
                 <Briefcase className={styles.brandIcon} size={22} aria-hidden />
-                <span className={styles.appName}>JobSync</span>
+                <span className={styles.appName}>Pipply</span>
               </div>
               <span className={styles.headerSep}>|</span>
               <span className={styles.headerSubtitle}>Dashboard</span>
@@ -832,6 +833,7 @@ export default function DashboardPage() {
 
               <Panel id="details" defaultSize="48%" minSize="30%">
                 <ApplicationDetails
+                  key={selectedApp?.id ?? "empty-application"}
                   application={selectedApp}
                   emails={emails}
                   onApplicationUpdated={handleApplicationUpdated}
@@ -869,7 +871,7 @@ export default function DashboardPage() {
               Are you sure you want to delete{" "}
               <strong>
                 {selectedApp?.company_name ?? "this application"}
-                {selectedApp?.job_title ? ` — ${selectedApp.job_title}` : ""}
+                {selectedApp?.job_title ? ` - ${selectedApp.job_title}` : ""}
               </strong>
               ? This action cannot be undone.
             </DialogDescription>
@@ -962,8 +964,7 @@ export default function DashboardPage() {
               <br />
               <br />
               If you&apos;re not sure, you can unlink the{" "}
-              {emailsToDelete.length === 1 ? "email" : "emails"} instead —
-              unlinking removes their effect on the application without
+              {emailsToDelete.length === 1 ? "email" : "emails"} instead - unlinking removes their effect on the application without
               deleting any data.
             </DialogDescription>
           </DialogHeader>
@@ -994,3 +995,4 @@ export default function DashboardPage() {
     </div>
   );
 }
+

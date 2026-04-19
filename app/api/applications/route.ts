@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getApiUser } from "@/lib/supabase/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  APPLICATION_TEXT_LIMITS,
+  isWithinTextLimit,
+} from "@/lib/application-field-limits";
 import type { ApplicationStatus, LocationType } from "@/types/applications";
 
 export async function GET(request: NextRequest) {
@@ -81,6 +85,29 @@ export async function POST(request: NextRequest) {
       : body.mode === "manual"
         ? body
         : { mode: "manual" as const, ...MANUAL_DEFAULTS };
+
+  const limitedTextFields = [
+    ["job_url", mode === "automatic" && "job_url" in body ? body.job_url ?? "" : ""],
+    ["company_name", manual.company_name ?? ""],
+    ["job_title", manual.job_title ?? ""],
+    ["location", manual.location ?? ""],
+    ["contact_person", manual.contact_person ?? ""],
+    ["notes", manual.notes ?? ""],
+  ] as const;
+
+  for (const [field, value] of limitedTextFields) {
+    if (
+      typeof value === "string" &&
+      !isWithinTextLimit(field, value.trim())
+    ) {
+      return NextResponse.json(
+        {
+          error: `${field.replaceAll("_", " ")} must be ${APPLICATION_TEXT_LIMITS[field]} characters or fewer`,
+        },
+        { status: 400 },
+      );
+    }
+  }
 
   const row = {
     company_name: manual.company_name?.trim() ?? MANUAL_DEFAULTS.company_name,
