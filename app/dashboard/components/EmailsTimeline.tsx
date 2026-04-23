@@ -9,6 +9,7 @@ import styles from "../dashboard.module.css";
 
 interface EmailsTimelineProps {
   timeline: TimelineEvent[];
+  isLoading?: boolean;
 }
 
 const EVENT_CONFIG: Record<
@@ -394,6 +395,7 @@ function GroupedEntry({
 
 export default function EmailsTimeline({
   timeline,
+  isLoading = false,
 }: EmailsTimelineProps) {
   const groups = groupTimelineEvents(timeline);
 
@@ -403,22 +405,34 @@ export default function EmailsTimeline({
         <section className={styles.timelineSection}>
           <h3 className={styles.sectionTitle}>Timeline</h3>
 
-          <div className={styles.timelineList}>
-            <AnimatePresence initial={false} mode="popLayout">
+          <motion.div
+            className={styles.timelineList}
+            initial={{ opacity: isLoading ? 0.3 : 1, filter: isLoading ? "blur(4px)" : "blur(0px)" }}
+            animate={{ opacity: 1, filter: "blur(0px)" }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+          >
+            <AnimatePresence initial={true} mode="wait">
               {groups.map((group, i) => {
                 const showLine = i < groups.length - 1;
 
                 return (
                   <motion.div
                     key={group.id}
-                    layout
-                    initial={{ opacity: 0, y: 10, scale: 0.97, filter: "blur(4px)" }}
-                    animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-                    exit={{ opacity: 0, scale: 0.95, filter: "blur(4px)", height: 0, marginBottom: 0, overflow: "hidden" }}
+                    initial={{ opacity: 0, filter: "blur(4px)" }}
+                    animate={{ opacity: 1, filter: "blur(0px)" }}
+                    exit={{
+                      opacity: 0,
+                      filter: "blur(4px)",
+                      transition: {
+                        duration: 0.2,
+                        delay: (groups.length - 1 - i) * 0.02,
+                        ease: [0.25, 0.1, 0.25, 1],
+                      },
+                    }}
                     transition={{
-                      duration: 0.3,
+                      duration: 0.2,
+                      delay: i * 0.02,
                       ease: [0.25, 0.1, 0.25, 1],
-                      layout: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] },
                     }}
                   >
                     {group.events.length === 1 && !group.email_subject ? (
@@ -434,7 +448,7 @@ export default function EmailsTimeline({
               })}
             </AnimatePresence>
 
-            {timeline.length === 0 && (
+            {timeline.length === 0 && !isLoading && (
               <motion.p
                 className={styles.emptyHint}
                 initial={{ opacity: 0 }}
@@ -444,7 +458,13 @@ export default function EmailsTimeline({
                 No timeline events yet.
               </motion.p>
             )}
-          </div>
+
+            {isLoading && (
+              <div className={styles.timelineLoading}>
+                <span>Fetching updates...</span>
+              </div>
+            )}
+          </motion.div>
         </section>
       </div>
     </ScrollArea>

@@ -11,6 +11,9 @@ import {
 import type { ApplicationEmail, FullEmail } from "@/types/applications";
 import styles from "../dashboard.module.css";
 
+// Simple session cache for email bodies to prevent flickering on re-opens
+const emailBodyCache: Record<string, FullEmail> = {};
+
 interface EmailViewerModalProps {
   email: ApplicationEmail | null;
   onClose: () => void;
@@ -51,18 +54,36 @@ function isHtml(str: string): boolean {
   return /<\/?[a-z][\s\S]*>/i.test(str);
 }
 
+function EmailSkeleton() {
+  return (
+    <div className={styles.emailSkeleton}>
+      <div className={styles.skeletonLine} style={{ width: "80%" }} />
+      <div className={styles.skeletonLine} style={{ width: "95%" }} />
+      <div className={styles.skeletonLine} style={{ width: "60%" }} />
+      <div className={styles.skeletonLine} style={{ width: "85%", marginTop: "1rem" }} />
+      <div className={styles.skeletonLine} style={{ width: "90%" }} />
+      <div className={styles.skeletonLine} style={{ width: "75%" }} />
+    </div>
+  );
+}
+
 export default function EmailViewerModal({
   email,
   onClose,
   onToggleLink,
 }: EmailViewerModalProps) {
-  const [fullEmail, setFullEmail] = useState<FullEmail | null>(null);
+  const [fullEmail, setFullEmail] = useState<FullEmail | null>(
+    email ? emailBodyCache[email.id] || null : null
+  );
   const [loading, setLoading] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
-    if (!email) {
-      setFullEmail(null);
+    if (!email) return;
+
+    if (emailBodyCache[email.id]) {
+      setFullEmail(emailBodyCache[email.id]);
+      setLoading(false);
       return;
     }
 
@@ -70,7 +91,12 @@ export default function EmailViewerModal({
     setShowDetails(false);
     fetch(`/api/emails/${email.id}`, { credentials: "include" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setFullEmail(data))
+      .then((data) => {
+        if (data) {
+          emailBodyCache[email.id] = data;
+          setFullEmail(data);
+        }
+      })
       .catch(() => setFullEmail(null))
       .finally(() => setLoading(false));
   }, [email]);
@@ -84,146 +110,145 @@ export default function EmailViewerModal({
   const emailAddress = getEmailAddress(email.sender);
 
   return (
-    <AnimatePresence>
+    <motion.div
+      key="email-viewer-overlay"
+      className={styles.emailViewerOverlay}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.25 }}
+      onClick={onClose}
+    >
       <motion.div
-        key="email-viewer-overlay"
-        className={styles.emailViewerOverlay}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2 }}
-        onClick={onClose}
+        className={styles.emailViewerModal}
+        initial={{ opacity: 0, scale: 0.96, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 20 }}
+        transition={{
+          duration: 0.4,
+          ease: [0.16, 1, 0.3, 1],
+          opacity: { duration: 0.2 }
+        }}
+        onClick={(e) => e.stopPropagation()}
       >
-        <motion.div
-          className={styles.emailViewerModal}
-          initial={{ opacity: 0, y: 40, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 40, scale: 0.97 }}
-          transition={{ duration: 0.25, ease: [0.19, 1, 0.22, 1] }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className={styles.emailViewerToolbar}>
-            <button
-              type="button"
-              className={`${styles.emailLinkToggle} ${email.linked ? styles.emailLinkToggleActive : ""}`}
-              onClick={() => onToggleLink(email)}
-              title={email.linked ? "Unlink this email" : "Link this email"}
-            >
-              <span className={styles.emailLinkToggleTrack}>
-                <span className={styles.emailLinkToggleThumb} />
-              </span>
-            </button>
-            <span className={styles.emailViewerToggleLabel}>
-              {email.linked ? "Linked" : "Unlinked"}
+        <div className={styles.emailViewerToolbar}>
+          <button
+            type="button"
+            className={`${styles.emailLinkToggle} ${email.linked ? styles.emailLinkToggleActive : ""}`}
+            onClick={() => onToggleLink(email)}
+            title={email.linked ? "Unlink this email" : "Link this email"}
+          >
+            <span className={styles.emailLinkToggleTrack}>
+              <span className={styles.emailLinkToggleThumb} />
             </span>
+          </button>
+          <span className={styles.emailViewerToggleLabel}>
+            {email.linked ? "Linked" : "Unlinked"}
+          </span>
 
-            <div className={styles.emailViewerToolbarSpacer} />
+          <div className={styles.emailViewerToolbarSpacer} />
 
-            <button
-              type="button"
-              className={styles.emailViewerCloseBtn}
-              onClick={onClose}
-              aria-label="Close"
-            >
-              <X size={20} />
-            </button>
-          </div>
+          <button
+            type="button"
+            className={styles.emailViewerCloseBtn}
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X size={20} />
+          </button>
+        </div>
 
-          <div className={styles.emailViewerContent}>
-            <h1 className={styles.emailViewerSubject}>
-              {email.subject || "(no subject)"}
-            </h1>
+        <div className={styles.emailViewerContent}>
+          <h1 className={styles.emailViewerSubject}>
+            {email.subject || "(no subject)"}
+          </h1>
 
-            <div className={styles.emailViewerHeader}>
-              <div className={styles.emailViewerAvatar}>
-                {getInitials(email.sender)}
-              </div>
-              <div className={styles.emailViewerMeta}>
-                <div className={styles.emailViewerSenderRow}>
-                  <span className={styles.emailViewerSenderName}>
-                    {displayName}
-                  </span>
-                  <span className={styles.emailViewerSenderEmail}>
-                    &lt;{emailAddress}&gt;
-                  </span>
-                </div>
-                <div className={styles.emailViewerToRow}>
-                  <span className={styles.emailViewerToLabel}>to me</span>
-                  <button
-                    type="button"
-                    className={styles.emailViewerDetailsToggle}
-                    onClick={() => setShowDetails((v) => !v)}
-                  >
-                    <ChevronDown
-                      size={14}
-                      style={{
-                        transform: showDetails ? "rotate(180deg)" : "none",
-                        transition: "transform 0.2s",
-                      }}
-                    />
-                  </button>
-                </div>
-
-                <AnimatePresence>
-                  {showDetails && (
-                    <motion.div
-                      className={styles.emailViewerDetails}
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: "auto", opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.2 }}
-                      style={{ overflow: "hidden" }}
-                    >
-                      <div className={styles.emailViewerDetailRow}>
-                        <span className={styles.emailViewerDetailLabel}>from:</span>
-                        <span>{email.sender}</span>
-                      </div>
-                      <div className={styles.emailViewerDetailRow}>
-                        <span className={styles.emailViewerDetailLabel}>date:</span>
-                        <span>{formatFullDate(email.received_date)}</span>
-                      </div>
-                      <div className={styles.emailViewerDetailRow}>
-                        <span className={styles.emailViewerDetailLabel}>subject:</span>
-                        <span>{email.subject}</span>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-              <span className={styles.emailViewerDate}>
-                <Clock size={12} />
-                {formatFullDate(email.received_date)}
-              </span>
+          <div className={styles.emailViewerHeader}>
+            <div className={styles.emailViewerAvatar}>
+              {getInitials(email.sender)}
             </div>
-
-            <div className={styles.emailViewerDivider} />
-
-            {loading ? (
-              <div className={styles.emailViewerLoading}>
-                <div className={styles.emailViewerSpinner} />
-                Loading email...
-              </div>
-            ) : hasBody ? (
-              bodyIsHtml ? (
-                <div
-                  className={styles.emailViewerBody}
-                  dangerouslySetInnerHTML={{ __html: body }}
-                />
-              ) : (
-                <pre className={styles.emailViewerBodyText}>{body}</pre>
-              )
-            ) : (
-              <div className={styles.emailViewerEmptyBody}>
-                <Paperclip size={32} strokeWidth={1.5} />
-                <p>No email body content available</p>
-                <span>
-                  The full content of this email hasn&apos;t been stored yet.
+            <div className={styles.emailViewerMeta}>
+              <div className={styles.emailViewerSenderRow}>
+                <span className={styles.emailViewerSenderName}>
+                  {displayName}
+                </span>
+                <span className={styles.emailViewerSenderEmail}>
+                  &lt;{emailAddress}&gt;
                 </span>
               </div>
-            )}
+              <div className={styles.emailViewerToRow}>
+                <span className={styles.emailViewerToLabel}>to me</span>
+                <button
+                  type="button"
+                  className={styles.emailViewerDetailsToggle}
+                  onClick={() => setShowDetails((v) => !v)}
+                >
+                  <ChevronDown
+                    size={14}
+                    style={{
+                      transform: showDetails ? "rotate(180deg)" : "none",
+                      transition: "transform 0.2s",
+                    }}
+                  />
+                </button>
+              </div>
+
+              <AnimatePresence>
+                {showDetails && (
+                  <motion.div
+                    className={styles.emailViewerDetails}
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    style={{ overflow: "hidden" }}
+                  >
+                    <div className={styles.emailViewerDetailRow}>
+                      <span className={styles.emailViewerDetailLabel}>from:</span>
+                      <span>{email.sender}</span>
+                    </div>
+                    <div className={styles.emailViewerDetailRow}>
+                      <span className={styles.emailViewerDetailLabel}>date:</span>
+                      <span>{formatFullDate(email.received_date)}</span>
+                    </div>
+                    <div className={styles.emailViewerDetailRow}>
+                      <span className={styles.emailViewerDetailLabel}>subject:</span>
+                      <span>{email.subject}</span>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+            <span className={styles.emailViewerDate}>
+              <Clock size={12} />
+              {formatFullDate(email.received_date)}
+            </span>
           </div>
-        </motion.div>
+
+          <div className={styles.emailViewerDivider} />
+
+          {loading ? (
+            <EmailSkeleton />
+          ) : hasBody ? (
+            bodyIsHtml ? (
+              <div
+                className={styles.emailViewerBody}
+                dangerouslySetInnerHTML={{ __html: body }}
+              />
+            ) : (
+              <pre className={styles.emailViewerBodyText}>{body}</pre>
+            )
+          ) : (
+            <div className={styles.emailViewerEmptyBody}>
+              <Paperclip size={32} strokeWidth={1.5} />
+              <p>No email body content available</p>
+              <span>
+                The full content of this email hasn&apos;t been stored yet.
+              </span>
+            </div>
+          )}
+        </div>
       </motion.div>
-    </AnimatePresence>
+    </motion.div>
   );
 }
