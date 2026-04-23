@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
   const CONCURRENCY_LIMIT = 5;
   for (let i = 0; i < deduplicatedSelectedEmails.length; i += CONCURRENCY_LIMIT) {
     const chunk = deduplicatedSelectedEmails.slice(i, i + CONCURRENCY_LIMIT);
-    
+
     await Promise.all(chunk.map(async (selected) => {
       try {
         const message = await getMessage(accessToken, selected.messageId);

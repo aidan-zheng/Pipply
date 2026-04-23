@@ -342,7 +342,7 @@ export default function ApplicationDetails({
         );
       }
       return (
-        <AnimatedValue value={displayValue || "__empty__"} className={styles.fieldValue} isLoading={isLoading}>
+        <AnimatedValue value={displayValue || "__empty__"} className={`${styles.fieldValue} ${styles.fieldValueNotes}`} isLoading={isLoading}>
           {isEmpty ? (
             <em className={styles.fieldEmpty}>No notes added.</em>
           ) : (

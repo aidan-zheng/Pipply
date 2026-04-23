@@ -3,7 +3,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentAppOwner } from "@/lib/supabase/api-auth";
-import { getLocalDateInputValue } from "@/lib/date-only";
+import { getLocalDateInputValue, parseDateOnly } from "@/lib/date-only";
 import {
   APPLICATION_TEXT_LIMITS,
   isWithinTextLimit,
@@ -17,6 +17,7 @@ import type {
   ApplicationFieldName,
   LocationType,
 } from "@/types/applications";
+import { recalculateApplication } from "@/lib/applications";
 
 export async function GET(
   request: NextRequest,
@@ -207,8 +208,49 @@ export async function PUT(
     }
   }
 
-  // Build event row in table column order so position-based mapping never swaps source_type and field_name
-  const eventTime = new Date().toISOString();
+  // If correcting the applied date, update initial batch in-place to avoid clutter
+  if (field_name === "date_applied" && value) {
+    const dateObj = parseDateOnly(String(value));
+    if (dateObj) {
+      const eventTime = dateObj.toISOString();
+      const { data: parentApp } = await admin
+        .from("applications")
+        .select("created_at")
+        .eq("id", applicationId)
+        .single();
+
+      if (parentApp?.created_at) {
+        const appCreatedAt = new Date(parentApp.created_at).getTime();
+        const BUFFER_MS = 30000; // 30s window for reliability
+
+        const { data: allEvents } = await admin
+          .from("application_field_events")
+          .select("id, created_at, field_name")
+          .eq("application_id", applicationId);
+
+        const initialBatch = (allEvents ?? []).filter(ev =>
+          Math.abs(new Date(ev.created_at).getTime() - appCreatedAt) < BUFFER_MS
+        );
+
+        if (initialBatch.length > 0) {
+          const batchIds = initialBatch.map(ev => ev.id);
+          // 1. Move all initial events to the new date
+          await admin.from("application_field_events").update({ event_time: eventTime }).in("id", batchIds);
+          // 2. Update the value of the original date_applied event
+          const dateEvent = initialBatch.find(ev => ev.field_name === "date_applied");
+          if (dateEvent) {
+            await admin.from("application_field_events").update({ value_date: String(value) }).eq("id", dateEvent.id);
+          }
+
+          const { data: updated } = await admin.from("application_current").select("*").eq("id", idNum).single();
+          return NextResponse.json(updated);
+        }
+      }
+    }
+  }
+
+  // Standard insert for new updates
+  let eventTime = new Date().toISOString();
   const eventRow = {
     application_id: applicationId,
     email_id: null as number | null,

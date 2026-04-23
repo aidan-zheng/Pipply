@@ -336,10 +336,21 @@ export default function DashboardPage() {
     const result: Record<string, unknown> = {};
     const seen = new Set<string>();
 
-    for (const ev of events) {
+    const sourcePriority: Record<string, number> = { email: 3, scrape: 2, manual: 1 };
+    const sorted = [...events].sort((a, b) => {
+      const timeA = new Date(a.event_time ?? a.created_at).getTime();
+      const timeB = new Date(b.event_time ?? b.created_at).getTime();
+      if (timeA !== timeB) return timeB - timeA;
+      const prioA = sourcePriority[a.source_type as string] ?? 0;
+      const prioB = sourcePriority[b.source_type as string] ?? 0;
+      return prioB - prioA;
+    });
+
+    for (const ev of sorted) {
       const f = ev.field_name;
-      if (seen.has(f)) continue;
       if (ev.email_id != null && inactiveEmailIds.has(ev.email_id)) continue;
+
+      if (seen.has(f)) continue;
       seen.add(f);
 
       const value = extractFieldValue(f, ev);
@@ -475,9 +486,26 @@ export default function DashboardPage() {
       const events = eventsData as ApplicationFieldEvent[];
       setRawEvents(events);
       rawEventsRef.current = events;
-      setTimeline(
-        buildFilteredTimeline(emailsRef.current, events, selectedApp.application_id),
+      
+      const newTimeline = buildFilteredTimeline(emailsRef.current, events, selectedApp.application_id);
+      setTimeline(newTimeline);
+
+      // Recalculate the application state based on the new event timeline
+      const recalculated = recalculateAppLocally(selectedApp, events, emailsRef.current);
+      setSelectedApp(recalculated);
+      setApplications((prev) =>
+        prev.map((a) => (a.id === recalculated.id ? recalculated : a)),
       );
+
+      // Update cache
+      setRelatedDataCache((prev) => ({
+        ...prev,
+        [selectedApp.id]: {
+          emails: emailsRef.current,
+          events: events,
+          timeline: newTimeline,
+        },
+      }));
     }
   }
 

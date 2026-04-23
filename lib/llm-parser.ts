@@ -19,12 +19,15 @@ const HEADER_MODELS = [
   "llama-3.1-8b-instant"
 ];
 
-let currentBodyModelIdx = 0;
-let currentHeaderModelIdx = 0;
-let currentKeyIdx = 0;
+class GroqApiError extends Error {
+  status: number;
+  constructor(status: number, body: string) {
+    super(`Groq API error ${status}: ${body}`);
+    this.status = status;
+  }
+}
 
-// rotates through all available GROQ_API_KEY* env variables.
-function getNextApiKey(): string {
+function getApiKeys(): string[] {
   const keys = Object.keys(process.env)
     .filter((k) => k.startsWith("GROQ_API_KEY"))
     .sort()
@@ -35,9 +38,7 @@ function getNextApiKey(): string {
     throw new Error("Missing GROQ_API_KEY environment variable(s)");
   }
 
-  const key = keys[currentKeyIdx % keys.length];
-  currentKeyIdx++;
-  return key;
+  return keys;
 }
 
 interface GroqMessage {
@@ -45,9 +46,7 @@ interface GroqMessage {
   content: string;
 }
 
-async function callGroq(messages: GroqMessage[], model: string): Promise<string> {
-  const apiKey = getNextApiKey();
-
+async function callGroq(messages: GroqMessage[], model: string, apiKey: string): Promise<string> {
   const res = await fetch(GROQ_API_URL, {
     method: "POST",
     headers: {
@@ -65,7 +64,7 @@ async function callGroq(messages: GroqMessage[], model: string): Promise<string>
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Groq API error ${res.status}: ${text}`);
+    throw new GroqApiError(res.status, text);
   }
 
   const data = await res.json();
@@ -76,41 +75,42 @@ const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
 async function callGroqWithRetry(messages: GroqMessage[], type: "body" | "header"): Promise<string> {
   const models = type === "body" ? BODY_MODELS : HEADER_MODELS;
-  let currentIdx = type === "body" ? currentBodyModelIdx : currentHeaderModelIdx;
-
+  const keys = getApiKeys();
   const MAX_CYCLES = 10;
 
   for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
-    let allModelsRateLimited = true;
+    let anyRateLimited = false;
 
-    for (let attempt = 0; attempt < models.length; attempt++) {
-      const model = models[currentIdx];
-      try {
-        return await callGroq(messages, model);
-      } catch (err: any) {
-        const isRateLimit = err.message.includes("429") || err.message.includes("rate limit");
-        const isSkippable = err.message.includes("400") || err.message.includes("404");
+    for (const model of models) {
+      let modelUnavailable = false;
 
-        if (isRateLimit || isSkippable) {
-          if (!isRateLimit) allModelsRateLimited = false;
-
-          console.warn(`[LLM Parser] Option ${model} failed (${err.message}), falling back to next...`);
-          currentIdx = (currentIdx + 1) % models.length;
-
-          if (type === "body") currentBodyModelIdx = currentIdx;
-          else currentHeaderModelIdx = currentIdx;
-          continue;
+      for (const key of keys) {
+        try {
+          return await callGroq(messages, model, key);
+        } catch (err) {
+          if (err instanceof GroqApiError) {
+            if (err.status === 429) {
+              anyRateLimited = true;
+              console.warn(`[LLM] ${model} rate limited, trying next key...`);
+              continue;
+            }
+            if (err.status === 400 || err.status === 404) {
+              console.warn(`[LLM] ${model} unavailable (${err.status}), skipping model...`);
+              modelUnavailable = true;
+              break;
+            }
+          }
+          throw err;
         }
-        throw err;
       }
+
+      if (modelUnavailable) continue;
     }
 
-    if (allModelsRateLimited) {
-      console.warn(`[LLM Parser] All ${type} models rate limited. Cycle ${cycle + 1}/${MAX_CYCLES} complete. Waiting 2s...`);
-      await sleep(2000);
-    } else {
-      break;
-    }
+    if (!anyRateLimited) break;
+
+    console.warn(`[LLM] All ${type} models rate limited. Cycle ${cycle + 1}/${MAX_CYCLES}. Waiting 2s...`);
+    await sleep(2000);
   }
 
   throw new Error(`All ${type} Groq models exhausted or unavailable after ${MAX_CYCLES} retry cycles.`);
@@ -224,7 +224,13 @@ export async function parseEmailBody(
   subject: string,
   sender: string,
   body: string,
-  currentApplication: { company_name: string; job_title: string; status: string; contact_person?: string | null },
+  currentApplication: { 
+    company_name: string; 
+    job_title: string; 
+    status: string; 
+    contact_person?: string | null;
+    notes?: string | null;
+  },
 ): Promise<ParsedEmailUpdate> {
   // Truncate very long bodies to avoid token limits
   const truncatedBody = body.length > 4000 ? body.slice(0, 4000) + "\n[...truncated]" : body;

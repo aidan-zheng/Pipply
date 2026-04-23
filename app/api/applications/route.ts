@@ -3,7 +3,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/supabase/api-auth";
-import { getLocalDateInputValue } from "@/lib/date-only";
+import { getLocalDateInputValue, parseDateOnly } from "@/lib/date-only";
 import {
   APPLICATION_TEXT_LIMITS,
   isWithinTextLimit,
@@ -183,7 +183,10 @@ export async function POST(request: NextRequest) {
   }
 
   const sourceType = mode === "automatic" ? "scrape" : "manual";
-  const eventTime = new Date().toISOString();
+
+  // prevents date shifts
+  const dateObj = parseDateOnly(row.date_applied);
+  const initialEventTime = dateObj ? dateObj.toISOString() : new Date().toISOString();
 
   const initialEvents: Record<string, unknown>[] = [];
 
@@ -193,7 +196,7 @@ export async function POST(request: NextRequest) {
       field_name: "status",
       source_type: sourceType,
       value_status: row.status,
-      event_time: eventTime,
+      event_time: initialEventTime,
     });
   }
   if (row.salary_per_hour != null) {
@@ -202,7 +205,7 @@ export async function POST(request: NextRequest) {
       field_name: "salary_per_hour",
       source_type: sourceType,
       value_number: row.salary_per_hour,
-      event_time: eventTime,
+      event_time: initialEventTime,
     });
   }
   if (row.location_type) {
@@ -211,7 +214,7 @@ export async function POST(request: NextRequest) {
       field_name: "location_type",
       source_type: sourceType,
       value_location_type: row.location_type,
-      event_time: eventTime,
+      event_time: initialEventTime,
     });
   }
   if (row.location) {
@@ -220,7 +223,7 @@ export async function POST(request: NextRequest) {
       field_name: "location",
       source_type: sourceType,
       value_text: row.location,
-      event_time: eventTime,
+      event_time: initialEventTime,
     });
   }
   if (row.contact_person) {
@@ -229,7 +232,7 @@ export async function POST(request: NextRequest) {
       field_name: "contact_person",
       source_type: sourceType,
       value_text: row.contact_person,
-      event_time: eventTime,
+      event_time: initialEventTime,
     });
   }
   if (row.date_applied) {
@@ -238,7 +241,7 @@ export async function POST(request: NextRequest) {
       field_name: "date_applied",
       source_type: sourceType,
       value_date: row.date_applied,
-      event_time: eventTime,
+      event_time: initialEventTime,
     });
   }
   if (row.notes) {
@@ -247,7 +250,7 @@ export async function POST(request: NextRequest) {
       field_name: "notes",
       source_type: sourceType,
       value_text: row.notes,
-      event_time: eventTime,
+      event_time: initialEventTime,
     });
   }
 
