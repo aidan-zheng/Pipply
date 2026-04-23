@@ -22,28 +22,9 @@ import type {
 } from "@/types/applications";
 import {
   STATUS_LABELS,
-  STATUS_COLORS,
   LOCATION_LABELS,
 } from "@/types/applications";
 import styles from "../dashboard.module.css";
-
-const SKELETON_HOLD_MS = 600;
-
-function SkeletonBar() {
-  return (
-    <motion.span
-      style={{
-        display: "block",
-        height: "1.1em",
-        width: "60%",
-        borderRadius: "999px",
-        background: "#d4d4d4",
-      }}
-      animate={{ opacity: [0.4, 0.8, 0.4] }}
-      transition={{ duration: 1, repeat: Infinity, ease: "easeInOut" }}
-    />
-  );
-}
 
 function CharacterHint({
   current,
@@ -61,58 +42,39 @@ function CharacterHint({
   );
 }
 
-function AnimatedValue({ value, className, children }: {
+function AnimatedValue({ value, className, isLoading, children, skipInitial = false }: {
+
   value: string;
   className?: string;
+  isLoading?: boolean;
   children?: React.ReactNode;
+  skipInitial?: boolean;
 }) {
-  const [showSkeleton, setShowSkeleton] = useState(false);
   const [committed, setCommitted] = useState({ value, children });
   const prevValueRef = useRef(value);
-  const mountedRef = useRef(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
-    if (!mountedRef.current) {
-      mountedRef.current = true;
-      return;
-    }
-
-    if (value === prevValueRef.current) {
+    if (prevValueRef.current === value) {
       setCommitted((c) => ({ ...c, children }));
       return;
     }
 
     prevValueRef.current = value;
-    setShowSkeleton(true);
-
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      setCommitted({ value, children });
-      setShowSkeleton(false);
-    }, SKELETON_HOLD_MS);
-
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setCommitted({ value, children });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   return (
     <span className={className} style={{ display: "block", position: "relative", minHeight: "1.2em" }}>
-      {showSkeleton ? (
-        <SkeletonBar />
-      ) : (
-        <motion.span
-          key={committed.value}
-          style={{ display: "block" }}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.25, ease: "easeOut" }}
-        >
-          {committed.children ?? committed.value}
-        </motion.span>
-      )}
+      <motion.span
+        key={committed.value}
+        style={{ display: "block" }}
+        initial={skipInitial ? false : { opacity: 0 }}
+        animate={{ opacity: isLoading ? 0.3 : 1 }}
+        transition={{ duration: 0.25, ease: "easeOut" }}
+      >
+        {committed.children ?? committed.value}
+      </motion.span>
     </span>
   );
 }
@@ -120,6 +82,7 @@ function AnimatedValue({ value, className, children }: {
 interface ApplicationDetailsProps {
   application: Application | null;
   emails: ApplicationEmail[];
+  isLoading?: boolean;
   onApplicationUpdated: (app: Application) => void;
   onEventsChange: () => void;
   onDeleteClick: () => void;
@@ -131,6 +94,7 @@ interface ApplicationDetailsProps {
 export default function ApplicationDetails({
   application,
   emails,
+  isLoading = false,
   onApplicationUpdated,
   onEventsChange,
   onDeleteClick,
@@ -147,6 +111,31 @@ export default function ApplicationDetails({
   const [selectedEmailIds, setSelectedEmailIds] = useState<Set<number>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
 
+  useEffect(() => {
+    setOptimisticApp(null);
+    setEditingField(null);
+    setEditValue("");
+    setSelectedEmailIds(new Set());
+    setSelectMode(false);
+  }, [application?.id]);
+
+  useEffect(() => {
+    setSelectedEmailIds((prev) => {
+      if (prev.size === 0) return prev;
+      const activeLinks = new Set(emails.map((e) => e.link_id));
+      const next = new Set<number>();
+      let changed = false;
+      for (const id of prev) {
+        if (activeLinks.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+
+    if (emails.length === 0) {
+      setSelectMode(false);
+    }
+  }, [emails]);
   function cancelEdit() {
     setEditingField(null);
     setEditValue("");
@@ -267,44 +256,44 @@ export default function ApplicationDetails({
     isEmpty?: boolean;
     isStatus?: boolean;
   }[] = [
-    {
-      label: "Hourly Salary (0 or more)",
-      value: app.salary_per_hour != null ? `$${app.salary_per_hour}` : "N/A",
-      fieldName: "salary_per_hour",
-    },
-    {
-      label: "Location Type",
-      value: app.location_type ? LOCATION_LABELS[app.location_type] : "N/A",
-      fieldName: "location_type",
-      label2: "Location",
-      value2: app.location || "N/A",
-      fieldName2: "location",
-    },
-    {
-      label: "Contact Person",
-      value: app.contact_person || "N/A",
-      fieldName: "contact_person",
-      label2: "Date Applied",
-      value2: formatDateOnly(app.date_applied, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-      fieldName2: "date_applied",
-    },
-    {
-      label: "Status",
-      value: STATUS_LABELS[app.status],
-      fieldName: "status",
-      isStatus: true,
-    },
-    {
-      label: "Notes",
-      value: app.notes || "",
-      isEmpty: !app.notes,
-      fieldName: "notes",
-    },
-  ];
+      {
+        label: "Hourly Salary (0+)",
+        value: app.salary_per_hour != null ? `$${app.salary_per_hour}` : "N/A",
+        fieldName: "salary_per_hour",
+      },
+      {
+        label: "Location Type",
+        value: app.location_type ? LOCATION_LABELS[app.location_type] : "N/A",
+        fieldName: "location_type",
+        label2: "Location",
+        value2: app.location || "N/A",
+        fieldName2: "location",
+      },
+      {
+        label: "Contact Person",
+        value: app.contact_person || "N/A",
+        fieldName: "contact_person",
+        label2: "Date Applied",
+        value2: formatDateOnly(app.date_applied, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        }),
+        fieldName2: "date_applied",
+      },
+      {
+        label: "Status",
+        value: STATUS_LABELS[app.status],
+        fieldName: "status",
+        isStatus: true,
+      },
+      {
+        label: "Notes",
+        value: app.notes || "",
+        isEmpty: !app.notes,
+        fieldName: "notes",
+      },
+    ];
 
   const sortedEmails = [...emails].sort((a, b) => (a.linked === b.linked ? 0 : a.linked ? -1 : 1));
 
@@ -353,7 +342,7 @@ export default function ApplicationDetails({
         );
       }
       return (
-        <AnimatedValue value={displayValue || "__empty__"} className={styles.fieldValue}>
+        <AnimatedValue value={displayValue || "__empty__"} className={styles.fieldValue} isLoading={isLoading}>
           {isEmpty ? (
             <em className={styles.fieldEmpty}>No notes added.</em>
           ) : (
@@ -400,7 +389,7 @@ export default function ApplicationDetails({
           </div>
         );
       }
-      return <AnimatedValue value={displayValue} className={styles.fieldValue} />;
+      return <AnimatedValue value={displayValue} className={styles.fieldValue} isLoading={isLoading} />;
     }
 
     if (fieldName === "location_type") {
@@ -441,7 +430,7 @@ export default function ApplicationDetails({
           </div>
         );
       }
-      return <AnimatedValue value={displayValue} className={styles.fieldValue} />;
+      return <AnimatedValue value={displayValue} className={styles.fieldValue} isLoading={isLoading} />;
     }
 
     if (fieldName === "date_applied") {
@@ -477,7 +466,7 @@ export default function ApplicationDetails({
           </div>
         );
       }
-      return <AnimatedValue value={displayValue} className={styles.fieldValue} />;
+      return <AnimatedValue value={displayValue} className={styles.fieldValue} isLoading={isLoading} />;
     }
 
     if (isEditing) {
@@ -502,9 +491,9 @@ export default function ApplicationDetails({
                 limitedField == null
                   ? e.target.value
                   : getLimitedTextValue(
-                      limitedField,
-                      e.target.value,
-                    ),
+                    limitedField,
+                    e.target.value,
+                  ),
               )
             }
             placeholder={isNum ? "e.g. 45" : ""}
@@ -536,9 +525,9 @@ export default function ApplicationDetails({
     }
 
     return (
-      <AnimatedValue value={displayValue || "__empty__"} className={styles.fieldValue}>
+      <AnimatedValue value={displayValue || "__empty__"} className={styles.fieldValue} isLoading={isLoading}>
         {isEmpty ? (
-          <em className={styles.fieldEmpty}>No notes added.</em>
+          <em className={styles.fieldEmpty}>N/A</em>
         ) : (
           displayValue
         )}
@@ -570,8 +559,11 @@ export default function ApplicationDetails({
       <div className={styles.detailsPanelInner}>
         <div className={styles.detailsHeader}>
           <h2 className={styles.detailsTitle}>
-            {app.company_name ?? "Unknown company"} {" - "}
-            {app.job_title ?? "Unknown role"}
+            <AnimatedValue
+              value={`${app.company_name ?? "Unknown company"} - ${app.job_title ?? "Unknown role"}`}
+              isLoading={isLoading}
+              skipInitial={true}
+            />
           </h2>
           <button
             type="button"
@@ -588,8 +580,8 @@ export default function ApplicationDetails({
             type="button"
             className={`${styles.actionBtn} ${styles.actionBtnPrimary}`}
             style={{
-              borderColor: STATUS_COLORS[app.status],
-              backgroundColor: STATUS_COLORS[app.status],
+              borderColor: "#404040",
+              backgroundColor: "#404040",
               color: "white",
             }}
             layout
@@ -611,25 +603,19 @@ export default function ApplicationDetails({
 
         <div className={styles.detailsForm}>
           {fields.map((field, i) => (
-            <motion.div
-              key={i}
-              className={styles.detailField}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2, delay: i * 0.03 }}
-            >
+            <div key={i} className={styles.detailField}>
               <div className={styles.fieldRow}>
                 <div className={styles.fieldGroup}>
                   <span className={styles.fieldLabel}>{field.label}</span>
                   <div className={styles.fieldValueRow}>
                     {field.fieldName
                       ? renderEditOrValue(
-                          field.fieldName,
-                          field.value,
-                          field.isEmpty,
-                        )
+                        field.fieldName,
+                        field.value,
+                        field.isEmpty,
+                      )
                       : (
-                        <span className={styles.fieldValue}>
+                        <span className={`${styles.fieldValue} ${isLoading ? styles.fieldValueLoading : ""}`}>
                           {field.isEmpty ? (
                             <em className={styles.fieldEmpty}>
                               No notes added.
@@ -666,12 +652,12 @@ export default function ApplicationDetails({
                     <div className={styles.fieldValueRow}>
                       {field.fieldName2
                         ? renderEditOrValue(
-                            field.fieldName2,
-                            field.value2 ?? "",
-                            false,
-                          )
+                          field.fieldName2,
+                          field.value2 ?? "",
+                          false,
+                        )
                         : (
-                          <span className={styles.fieldValue}>
+                          <span className={`${styles.fieldValue} ${isLoading ? styles.fieldValueLoading : ""}`}>
                             {field.value2}
                           </span>
                         )}
@@ -696,7 +682,7 @@ export default function ApplicationDetails({
                   </div>
                 )}
               </div>
-            </motion.div>
+            </div>
           ))}
         </div>
 
@@ -809,8 +795,14 @@ export default function ApplicationDetails({
               </div>
             );
           })}
-          {emails.length === 0 && (
+          {emails.length === 0 && !isLoading && (
             <p className={styles.emptyHint}>No related emails yet.</p>
+          )}
+          {isLoading && (
+            <div className={styles.emailsLoading}>
+              <Loader2 size={18} className="animate-spin" />
+              <span>Updating timeline...</span>
+            </div>
           )}
         </div>
       </div>

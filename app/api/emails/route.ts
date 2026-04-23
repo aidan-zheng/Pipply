@@ -1,15 +1,11 @@
+/**
+ * Handles fetching, toggling, and deleting emails linked to applications. Triggers state recalculation to maintain chronological accuracy when email links are modified.
+ */
 import { NextRequest, NextResponse } from "next/server";
-import { getApiUser } from "@/lib/supabase/api-auth";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { getLocalDateInputValue } from "@/lib/date-only";
+import { requireAuth, requireAppOwner } from "@/lib/supabase/api-auth";
 import type { Confidence } from "@/types/applications";
 
-function parseConfidence(value: unknown): Confidence {
-  if (value === "high" || value === "medium" || value === "low") {
-    return value;
-  }
-  return "medium";
-}
+import { parseConfidenceNum, parseConfidenceString } from "@/types/applications";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -23,29 +19,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const user = await getApiUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const admin = createAdminClient();
-
-  const { data: parent, error: parentError } = await admin
-    .from("applications")
-    .select("id, user_id")
-    .eq("id", applicationId)
-    .single();
-
-  if (parentError || !parent) {
-    return NextResponse.json(
-      { error: "Application not found" },
-      { status: 404 },
-    );
-  }
-
-  if (parent.user_id !== user.id) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const auth = await requireAppOwner(request, applicationId);
+  if (auth.errorResponse) return auth.errorResponse;
+  const { admin } = auth;
 
   const { data: links, error } = await admin
     .from("application_email_links")
@@ -79,8 +55,7 @@ export async function GET(request: NextRequest) {
         received_date: email?.received_at
           ? new Date(email.received_at).toISOString()
           : "",
-        confidence:
-          row.confidence === 3 ? "high" : row.confidence === 1 ? "low" : "medium",
+        confidence: parseConfidenceString(row.confidence),
         linked: row.is_active,
       };
     },
@@ -125,32 +100,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const user = await getApiUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireAppOwner(request, applicationId);
+  if (auth.errorResponse) return auth.errorResponse;
+  const { user, admin } = auth;
 
-  const admin = createAdminClient();
-
-  const { data: parent, error: parentError } = await admin
-    .from("applications")
-    .select("id, user_id")
-    .eq("id", applicationId)
-    .single();
-
-  if (parentError || !parent) {
-    return NextResponse.json(
-      { error: "Application not found" },
-      { status: 404 },
-    );
-  }
-
-  if (parent.user_id !== user.id) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
-  const confidence = parseConfidence(body.confidence);
-  const confidenceNum = confidence === "high" ? 3 : confidence === "low" ? 1 : 2;
+  const confidenceNum = parseConfidenceNum(body.confidence);
+  const confidence = parseConfidenceString(confidenceNum);
 
   const { data: emailRow, error: emailError } = await admin
     .from("emails")
@@ -204,80 +159,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(response, { status: 201 });
 }
 
-function extractFieldValue(
-  fieldName: string,
-  event: Record<string, unknown>,
-): unknown {
-  switch (fieldName) {
-    case "status":
-      return event.value_status ?? null;
-    case "salary_per_hour":
-      return event.value_number ?? null;
-    case "location_type":
-      return event.value_location_type ?? null;
-    case "location":
-    case "contact_person":
-    case "notes":
-      return event.value_text ?? null;
-    case "date_applied":
-      return event.value_date ?? null;
-    default:
-      return null;
-  }
-}
-
-async function recalculateApplication(
-  admin: ReturnType<typeof createAdminClient>,
-  applicationId: number,
-  excludeEmailIds: Set<number>,
-) {
-  const { data: allEvents } = await admin
-    .from("application_field_events")
-    .select("*")
-    .eq("application_id", applicationId)
-    .order("event_time", { ascending: false });
-
-  const recalculated: Record<string, unknown> = {};
-  const seenFields = new Set<string>();
-
-  for (const event of allEvents ?? []) {
-    const fieldName = event.field_name as string;
-    if (seenFields.has(fieldName)) continue;
-    if (event.email_id != null && excludeEmailIds.has(event.email_id)) continue;
-
-    seenFields.add(fieldName);
-    const value = extractFieldValue(fieldName, event);
-    if (fieldName === "salary_yearly") continue;
-    recalculated[fieldName] = value;
-  }
-
-  const fieldsWithPossibleEvents = [
-    "status", "salary_per_hour", "location_type",
-    "location", "contact_person", "date_applied", "notes",
-  ];
-  for (const f of fieldsWithPossibleEvents) {
-    if (!(f in recalculated)) recalculated[f] = null;
-  }
-
-  if (recalculated.status == null) recalculated.status = "applied";
-  if (recalculated.date_applied == null) {
-    recalculated.date_applied = getLocalDateInputValue();
-  }
-  recalculated.updated_at = new Date().toISOString();
-
-  await admin
-    .from("application_current")
-    .update(recalculated)
-    .eq("application_id", applicationId);
-
-  const { data: updatedApp } = await admin
-    .from("application_current")
-    .select("*")
-    .eq("application_id", applicationId)
-    .single();
-
-  return updatedApp;
-}
+import { recalculateApplication } from "@/lib/applications";
 
 export async function PATCH(request: NextRequest) {
   let body: { link_id: number; is_active: boolean };
@@ -294,12 +176,9 @@ export async function PATCH(request: NextRequest) {
     );
   }
 
-  const user = await getApiUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const admin = createAdminClient();
+  const auth = await requireAuth(request);
+  if (auth.errorResponse) return auth.errorResponse;
+  const { user, admin } = auth;
 
   const { data: link, error: linkErr } = await admin
     .from("application_email_links")
@@ -329,17 +208,7 @@ export async function PATCH(request: NextRequest) {
 
   const applicationId = link.application_id;
 
-  const { data: inactiveLinks } = await admin
-    .from("application_email_links")
-    .select("email_id")
-    .eq("application_id", applicationId)
-    .eq("is_active", false);
-
-  const inactiveEmailIds = new Set(
-    (inactiveLinks ?? []).map((l: { email_id: number }) => l.email_id),
-  );
-
-  const updatedApp = await recalculateApplication(admin, applicationId, inactiveEmailIds);
+  const updatedApp = await recalculateApplication(admin, applicationId);
 
   return NextResponse.json({ ok: true, application: updatedApp });
 }
@@ -359,12 +228,9 @@ export async function DELETE(request: NextRequest) {
     );
   }
 
-  const user = await getApiUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const admin = createAdminClient();
+  const auth = await requireAuth(request);
+  if (auth.errorResponse) return auth.errorResponse;
+  const { user, admin } = auth;
 
   const { data: links, error: linksErr } = await admin
     .from("application_email_links")
@@ -384,8 +250,8 @@ export async function DELETE(request: NextRequest) {
   }
 
   const applicationId = links[0].application_id;
-  const emailIds = links.map((l) => l.email_id);
-  const linkIds = links.map((l) => l.id);
+  const emailIds = links.map((l: any) => l.email_id);
+  const linkIds = links.map((l: any) => l.id);
 
   await admin
     .from("application_field_events")
@@ -403,17 +269,7 @@ export async function DELETE(request: NextRequest) {
     .delete()
     .in("id", emailIds);
 
-  const { data: remainingInactive } = await admin
-    .from("application_email_links")
-    .select("email_id")
-    .eq("application_id", applicationId)
-    .eq("is_active", false);
-
-  const inactiveEmailIds = new Set(
-    (remainingInactive ?? []).map((l: { email_id: number }) => l.email_id),
-  );
-
-  const updatedApp = await recalculateApplication(admin, applicationId, inactiveEmailIds);
+  const updatedApp = await recalculateApplication(admin, applicationId);
 
   return NextResponse.json({ ok: true, application: updatedApp });
 }

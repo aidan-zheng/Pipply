@@ -39,6 +39,13 @@ interface NewApplicationModalProps {
 
 type Mode = "automatic" | "manual";
 
+function getLocalDateString(d: Date = new Date()): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 const EMPTY_FORM = {
   job_url: "",
   company_name: "",
@@ -79,11 +86,11 @@ export default function NewApplicationModal({
   ) {
     const nextValue =
       typeof value === "string" &&
-      key in APPLICATION_TEXT_LIMITS
+        key in APPLICATION_TEXT_LIMITS
         ? getLimitedTextValue(
-            key as keyof typeof APPLICATION_TEXT_LIMITS,
-            value,
-          )
+          key as keyof typeof APPLICATION_TEXT_LIMITS,
+          value,
+        )
         : value;
 
     setForm((prev) => ({ ...prev, [key]: nextValue }));
@@ -130,17 +137,17 @@ export default function NewApplicationModal({
       mode === "automatic"
         ? { mode: "automatic" as const, job_url: form.job_url.trim() }
         : {
-            mode: "manual" as const,
-            company_name: form.company_name.trim(),
-            job_title: form.job_title.trim(),
-            salary_per_hour: parseOptionalNumber(form.salary_per_hour) ?? null,
-            location_type: form.location_type || null,
-            location: form.location.trim() || null,
-            date_applied: form.date_applied || getLocalDateInputValue(),
-            contact_person: form.contact_person.trim() || null,
-            status: form.status,
-            notes: form.notes.trim() || null,
-          };
+          mode: "manual" as const,
+          company_name: form.company_name.trim(),
+          job_title: form.job_title.trim(),
+          salary_per_hour: parseOptionalNumber(form.salary_per_hour) ?? null,
+          location_type: form.location_type || null,
+          location: form.location.trim() || null,
+          date_applied: form.date_applied || getLocalDateInputValue(),
+          contact_person: form.contact_person.trim() || null,
+          status: form.status,
+          notes: form.notes.trim() || null,
+        };
 
     const res = await fetch("/api/applications", {
       method: "POST",
@@ -247,7 +254,7 @@ export default function NewApplicationModal({
 
               <div className={styles.formField}>
                 <Label htmlFor="salary" className={styles.formLabel}>
-                  Hourly Salary (0 or more)
+                  Hourly Salary (0+)
                 </Label>
                 <Input
                   id="salary"

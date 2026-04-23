@@ -1,6 +1,8 @@
+/**
+ * Handles fetching the user's list of current applications and creating new applications (both via manual input and automated scraping).
+ */
 import { NextRequest, NextResponse } from "next/server";
-import { getApiUser } from "@/lib/supabase/api-auth";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { requireAuth } from "@/lib/supabase/api-auth";
 import { getLocalDateInputValue } from "@/lib/date-only";
 import {
   APPLICATION_TEXT_LIMITS,
@@ -13,38 +15,25 @@ import {
 import type { ApplicationStatus, LocationType } from "@/types/applications";
 
 export async function GET(request: NextRequest) {
-  const user = await getApiUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireAuth(request);
+  if (auth.errorResponse) return auth.errorResponse;
+  const { user, admin } = auth;
 
-  const admin = createAdminClient();
-
-  const { data: appIds, error: idsError } = await admin
-    .from("applications")
-    .select("id")
-    .eq("user_id", user.id);
-
-  if (idsError) {
-    return NextResponse.json({ error: idsError.message }, { status: 500 });
-  }
-
-  const ids = (appIds ?? []).map((r) => r.id);
-  if (ids.length === 0) {
-    return NextResponse.json([]);
-  }
-
+  // joins application_current with applications to filter by user_id in a single query.
   const { data, error } = await admin
     .from("application_current")
-    .select("*")
-    .in("application_id", ids)
+    .select("*, applications!inner(user_id)")
+    .eq("applications.user_id", user.id)
     .order("date_applied", { ascending: false });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(data ?? []);
+  // clean up inner join metadata from the response
+  const cleanedData = (data ?? []).map(({ applications, ...rest }) => rest);
+
+  return NextResponse.json(cleanedData);
 }
 
 const MANUAL_DEFAULTS = {
@@ -62,17 +51,17 @@ const MANUAL_DEFAULTS = {
 export type CreateApplicationBody =
   | { mode: "automatic"; job_url?: string }
   | {
-      mode: "manual";
-      company_name?: string;
-      job_title?: string;
-      salary_per_hour?: number | null;
-      location_type?: LocationType | null;
-      location?: string | null;
-      date_applied?: string;
-      contact_person?: string | null;
-      status?: ApplicationStatus;
-      notes?: string | null;
-    };
+    mode: "manual";
+    company_name?: string;
+    job_title?: string;
+    salary_per_hour?: number | null;
+    location_type?: LocationType | null;
+    location?: string | null;
+    date_applied?: string;
+    contact_person?: string | null;
+    status?: ApplicationStatus;
+    notes?: string | null;
+  };
 
 export async function POST(request: NextRequest) {
   let body: CreateApplicationBody;
@@ -153,12 +142,9 @@ export async function POST(request: NextRequest) {
         : MANUAL_DEFAULTS.notes,
   };
 
-  const user = await getApiUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const admin = createAdminClient();
+  const auth = await requireAuth(request);
+  if (auth.errorResponse) return auth.errorResponse;
+  const { user, admin } = auth;
 
   const jobUrl =
     mode === "automatic" && "job_url" in body && body.job_url
