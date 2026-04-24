@@ -1,14 +1,19 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
 import { Briefcase, User } from "lucide-react";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
 import Grainient from "@/components/Grainient/Grainient";
+import {
+  formatCompensation,
+  formatCompensationAmount,
+  isSalaryType,
+} from "@/lib/compensation";
 import ApplicationsList from "./components/ApplicationsList";
 import ApplicationDetails from "./components/ApplicationDetails";
 import EmailsTimeline from "./components/EmailsTimeline";
@@ -30,8 +35,13 @@ import type {
   TimelineEvent,
   ApplicationStatus,
   LocationType,
+  SalaryType,
 } from "@/types/applications";
-import { STATUS_LABELS, LOCATION_LABELS } from "@/types/applications";
+import {
+  STATUS_LABELS,
+  LOCATION_LABELS,
+  SALARY_TYPE_LABELS,
+} from "@/types/applications";
 
 import styles from "./dashboard.module.css";
 
@@ -196,8 +206,10 @@ export default function DashboardPage() {
   }, [user]);
 
   const FIELD_LABELS: Record<string, string> = {
-    salary_per_hour: "Salary / hour",
-    salary_yearly: "Salary (yearly)",
+    compensation_amount: "Compensation",
+    salary_type: "Salary type",
+    salary_per_hour: "Hourly compensation",
+    salary_yearly: "Yearly compensation",
     location_type: "Location type",
     location: "Location",
     contact_person: "Contact person",
@@ -219,7 +231,21 @@ export default function DashboardPage() {
           : "scraped";
 
     let valueStr = "";
-    if (e.value_number != null) valueStr = String(e.value_number);
+    if (e.field_name === "compensation_amount") {
+      valueStr = formatCompensationAmount(e.value_number ?? null);
+    } else if (e.field_name === "salary_per_hour") {
+      valueStr =
+        e.value_number != null
+          ? formatCompensation(e.value_number, "hourly")
+          : "N/A";
+    } else if (e.field_name === "salary_yearly") {
+      valueStr =
+        e.value_number != null
+          ? formatCompensation(e.value_number, "yearly")
+          : "N/A";
+    } else if (e.field_name === "salary_type" && e.value_text && isSalaryType(e.value_text)) {
+      valueStr = SALARY_TYPE_LABELS[e.value_text as SalaryType];
+    } else if (e.value_number != null) valueStr = String(e.value_number);
     else if (e.value_text) valueStr = e.value_text;
     else if (e.value_date) valueStr = e.value_date;
     else if (e.value_status) valueStr = STATUS_LABELS[e.value_status];
@@ -296,6 +322,46 @@ export default function DashboardPage() {
     );
   }
 
+  function applyCompensationEventLocally(
+    fieldName: string,
+    event: ApplicationFieldEvent,
+    result: Record<string, unknown>,
+    seen: Set<string>,
+  ) {
+    if (fieldName === "compensation_amount") {
+      if (!seen.has("compensation_amount")) {
+        result.compensation_amount = event.value_number ?? null;
+        seen.add("compensation_amount");
+      }
+      return true;
+    }
+
+    if (fieldName === "salary_type") {
+      if (!seen.has("salary_type")) {
+        result.salary_type =
+          event.value_text && isSalaryType(event.value_text)
+            ? event.value_text
+            : null;
+        seen.add("salary_type");
+      }
+      return true;
+    }
+
+    if (fieldName === "salary_per_hour" || fieldName === "salary_yearly") {
+      if (!seen.has("compensation_amount")) {
+        result.compensation_amount = event.value_number ?? null;
+        seen.add("compensation_amount");
+      }
+      if (!seen.has("salary_type")) {
+        result.salary_type = fieldName === "salary_yearly" ? "yearly" : "hourly";
+        seen.add("salary_type");
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   function recalculateAppLocally(
     app: Application,
     events: ApplicationFieldEvent[],
@@ -310,16 +376,18 @@ export default function DashboardPage() {
 
     for (const ev of events) {
       const f = ev.field_name;
-      if (seen.has(f)) continue;
       if (ev.email_id != null && inactiveEmailIds.has(ev.email_id)) continue;
+
+      if (applyCompensationEventLocally(f, ev, result, seen)) {
+        continue;
+      }
+
+      if (seen.has(f)) continue;
       seen.add(f);
 
       switch (f) {
         case "status":
           result.status = ev.value_status ?? null;
-          break;
-        case "salary_per_hour":
-          result.salary_per_hour = ev.value_number ?? null;
           break;
         case "location_type":
           result.location_type = ev.value_location_type ?? null;
@@ -342,7 +410,8 @@ export default function DashboardPage() {
     return {
       ...app,
       status: (result.status as ApplicationStatus) ?? "applied",
-      salary_per_hour: (result.salary_per_hour as number | null) ?? null,
+      compensation_amount: (result.compensation_amount as number | null) ?? null,
+      salary_type: (result.salary_type as SalaryType | null) ?? null,
       location_type:
         (result.location_type as Application["location_type"]) ?? null,
       location: (result.location as string | null) ?? null,

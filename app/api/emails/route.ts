@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getApiUser } from "@/lib/supabase/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isSalaryType } from "@/lib/compensation";
 import { getLocalDateInputValue } from "@/lib/date-only";
-import type { Confidence } from "@/types/applications";
+import type { Confidence, SalaryType } from "@/types/applications";
 
 function parseConfidence(value: unknown): Confidence {
   if (value === "high" || value === "medium" || value === "low") {
@@ -211,8 +212,12 @@ function extractFieldValue(
   switch (fieldName) {
     case "status":
       return event.value_status ?? null;
+    case "compensation_amount":
     case "salary_per_hour":
+    case "salary_yearly":
       return event.value_number ?? null;
+    case "salary_type":
+      return event.value_text ?? null;
     case "location_type":
       return event.value_location_type ?? null;
     case "location":
@@ -224,6 +229,49 @@ function extractFieldValue(
     default:
       return null;
   }
+}
+
+function applyCompensationEvent(
+  fieldName: string,
+  value: unknown,
+  target: Record<string, unknown>,
+  seenFields: Set<string>,
+) {
+  if (fieldName === "compensation_amount") {
+    if (!seenFields.has("compensation_amount")) {
+      target.compensation_amount = value ?? null;
+      seenFields.add("compensation_amount");
+    }
+    return true;
+  }
+
+  if (fieldName === "salary_type") {
+    if (!seenFields.has("salary_type")) {
+      target.salary_type =
+        typeof value === "string" && isSalaryType(value)
+          ? (value as SalaryType)
+          : null;
+      seenFields.add("salary_type");
+    }
+    return true;
+  }
+
+  if (fieldName === "salary_per_hour" || fieldName === "salary_yearly") {
+    if (!seenFields.has("compensation_amount")) {
+      target.compensation_amount =
+        typeof value === "number" ? value : value == null ? null : Number(value);
+      seenFields.add("compensation_amount");
+    }
+
+    if (!seenFields.has("salary_type")) {
+      target.salary_type = fieldName === "salary_yearly" ? "yearly" : "hourly";
+      seenFields.add("salary_type");
+    }
+
+    return true;
+  }
+
+  return false;
 }
 
 async function recalculateApplication(
@@ -242,17 +290,24 @@ async function recalculateApplication(
 
   for (const event of allEvents ?? []) {
     const fieldName = event.field_name as string;
-    if (seenFields.has(fieldName)) continue;
     if (event.email_id != null && excludeEmailIds.has(event.email_id)) continue;
 
-    seenFields.add(fieldName);
     const value = extractFieldValue(fieldName, event);
-    if (fieldName === "salary_yearly") continue;
+    if (applyCompensationEvent(fieldName, value, recalculated, seenFields)) {
+      continue;
+    }
+
+    if (seenFields.has(fieldName)) continue;
+
+    seenFields.add(fieldName);
     recalculated[fieldName] = value;
   }
 
   const fieldsWithPossibleEvents = [
-    "status", "salary_per_hour", "location_type",
+    "status",
+    "compensation_amount",
+    "salary_type",
+    "location_type",
     "location", "contact_person", "date_applied", "notes",
   ];
   for (const f of fieldsWithPossibleEvents) {

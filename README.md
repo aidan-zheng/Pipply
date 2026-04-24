@@ -35,10 +35,11 @@ A job application tracker built with Next.js and Supabase. Track applications, l
 
    - `supabase-rls-application-current.sql` — RLS policies for `application_current`
    - `supabase-application-field-events.sql` — creates the `application_field_events` table and enums
+   - `supabase-compensation-salary-type-migration.sql` — adds `compensation_amount` + `salary_type` to `application_current` and backfills existing hourly data
 
    The database schema is two main tables:
    - **`applications`** — one row per application, holds `user_id`, optional `job_url`, timestamps
-   - **`application_current`** — one row per application, holds all the editable job fields (company, title, salary, status, etc.), linked via `application_id` FK
+   - **`application_current`** — one row per application, holds all the editable job fields (company, title, compensation, status, etc.), linked via `application_id` FK
 
    There's also `application_field_events` for tracking every field change over time (timeline).
 
@@ -149,7 +150,7 @@ Updates a single field and logs it as a timeline event. Body:
 { "field_name": "status", "value": "interviewing" }
 ```
 
-Supported fields: `salary_per_hour`, `salary_yearly`, `location_type`, `location`, `contact_person`, `status`, `date_applied`, `notes`.
+Supported fields: `compensation_amount`, `salary_type`, `location_type`, `location`, `contact_person`, `status`, `date_applied`, `notes`.
 
 ### `DELETE /api/applications/:id`
 
@@ -184,6 +185,6 @@ Not yet implemented (returns 501).
 See `supabase-application-fk.md` for the full relationship breakdown. The short version:
 
 - **`applications`** — `id`, `user_id`, `job_url`, `created_at`, `updated_at`
-- **`application_current`** — `id`, `application_id` (FK to applications), all job detail fields
+- **`application_current`** — `id`, `application_id` (FK to applications), all job detail fields including `compensation_amount` and `salary_type`
 - **`application_field_events`** — `id`, `application_id` (FK), `source_type`, `field_name`, typed value columns, `event_time`
 - **`application_emails`** — linked emails (queried directly via Supabase client on the dashboard)

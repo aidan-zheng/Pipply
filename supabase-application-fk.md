@@ -5,7 +5,7 @@
 ## Schema (for context)
 
 - **applications**: `id` (identity), `user_id` (uuid, default auth.uid()), `job_url`, `created_at`, `updated_at`
-- **application_current**: `id`, `application_id` (FK → applications.id), `updated_at`, plus job fields: `company_name`, `job_title`, `salary_per_hour`, `notes`, `location_type`, `location`, `date_applied`, `contact_person`, `status`
+- **application_current**: `id`, `application_id` (FK -> applications.id), `updated_at`, plus job fields: `company_name`, `job_title`, `compensation_amount`, `salary_type`, legacy `salary_per_hour`, `notes`, `location_type`, `location`, `date_applied`, `contact_person`, `status`
 
 ## What the API does
 

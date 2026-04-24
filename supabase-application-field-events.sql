@@ -13,6 +13,8 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'application_field_events_field_name') THEN
     CREATE TYPE application_field_events_field_name AS ENUM (
       'company_name',
+      'compensation_amount',
+      'salary_type',
       'salary_per_hour',
       'salary_yearly',
       'location_type',
