@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
-import { Briefcase, User } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Briefcase, User, Mail } from "lucide-react";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
@@ -18,7 +18,9 @@ import ApplicationsList from "./components/ApplicationsList";
 import ApplicationDetails from "./components/ApplicationDetails";
 import EmailsTimeline from "./components/EmailsTimeline";
 import EmailViewerModal from "./components/EmailViewerModal";
+import ScanEmailsModal from "./components/ScanEmailsModal";
 import NewApplicationModal from "./components/NewApplicationModal";
+import { extractFieldValue } from "@/lib/applications";
 import {
   Dialog,
   DialogContent,
@@ -45,6 +47,17 @@ import {
 
 import styles from "./dashboard.module.css";
 
+const FIELD_LABELS: Record<string, string> = {
+  salary_per_hour: "Salary / hour",
+  salary_yearly: "Salary (yearly)",
+  location_type: "Location type",
+  location: "Location",
+  contact_person: "Contact person",
+  status: "Status",
+  date_applied: "Date applied",
+  notes: "Notes",
+};
+
 export default function DashboardPage() {
   const router = useRouter();
   const [supabase] = useState(() => createClient());
@@ -56,6 +69,19 @@ export default function DashboardPage() {
   const [rawEvents, setRawEvents] = useState<ApplicationFieldEvent[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [relatedDataLoading, setRelatedDataLoading] = useState(false);
+
+  // cache for related data (emails and events) keyed by application ID (currentAppId)
+  const [relatedDataCache, setRelatedDataCache] = useState<
+    Record<
+      number,
+      {
+        emails: ApplicationEmail[];
+        events: ApplicationFieldEvent[];
+        timeline: TimelineEvent[];
+      }
+    >
+  >({});
 
   const applicationsRef = useRef(applications);
   applicationsRef.current = applications;
@@ -75,9 +101,8 @@ export default function DashboardPage() {
   );
   const [showNewModal, setShowNewModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [viewingEmail, setViewingEmail] = useState<ApplicationEmail | null>(
-    null,
-  );
+  const [viewingEmail, setViewingEmail] = useState<ApplicationEmail | null>(null);
+  const [showScanModal, setShowScanModal] = useState(false);
   const [emailsToDelete, setEmailsToDelete] = useState<ApplicationEmail[]>([]);
   const [showDeleteEmailsModal, setShowDeleteEmailsModal] = useState(false);
   const [appsSelectMode, setAppsSelectMode] = useState(false);
@@ -117,6 +142,7 @@ export default function DashboardPage() {
       setEmails([]);
       setRawEvents([]);
       setTimeline([]);
+      setRelatedDataCache({});
       setViewingEmail(null);
       setShowNewModal(false);
       setShowDeleteModal(false);
@@ -143,12 +169,7 @@ export default function DashboardPage() {
       }
 
       const prevUserId = authUserIdRef.current;
-
-      authUserIdRef.current = nextUserId;
-      setUser(nextUser);
-
-      if (prevUserId === nextUserId) return;
-
+      if (prevUserId === nextUserId) return; // Prevent re-fetching if user is same
       resetDashboardState();
 
       if (!nextUserId) {
@@ -171,7 +192,7 @@ export default function DashboardPage() {
   }, [router, supabase.auth]);
 
   async function refetchApplications() {
-    if (!user) return;
+    if (!user) return [];
 
     const requestId = beginApplicationsRequest();
     const userId = user.id;
@@ -183,40 +204,32 @@ export default function DashboardPage() {
       requestId !== applicationsRequestIdRef.current ||
       authUserIdRef.current !== userId
     ) {
-      return;
+      return [];
     }
 
     if (res.ok && Array.isArray(data)) {
       applicationsRef.current = data;
       setApplications(data);
+
+      const firstApp = data[0] ?? null;
       setSelectedApp((prev) => {
-        if (data.length > 0 && !prev) return data[0];
-        if (prev && !data.some((a: Application) => a.id === prev?.id))
-          return data[0] ?? null;
+        if (data.length > 0 && !prev) return firstApp;
+        if (prev) {
+          const updated = data.find((a: Application) => a.id === prev.id);
+          return updated ?? firstApp;
+        }
         return prev;
       });
     }
 
     setLoading(false);
+    return res.ok && Array.isArray(data) ? data : [];
   }
 
   useEffect(() => {
     refetchApplications();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
-
-  const FIELD_LABELS: Record<string, string> = {
-    compensation_amount: "Compensation",
-    salary_type: "Salary type",
-    salary_per_hour: "Hourly compensation",
-    salary_yearly: "Yearly compensation",
-    location_type: "Location type",
-    location: "Location",
-    contact_person: "Contact person",
-    status: "Status",
-    date_applied: "Date applied",
-    notes: "Notes",
-  };
 
   function fieldEventToTimelineEvent(
     e: ApplicationFieldEvent,
@@ -362,6 +375,21 @@ export default function DashboardPage() {
     return false;
   }
 
+  function buildFilteredTimeline(
+    emailsList: ApplicationEmail[],
+    eventsList: ApplicationFieldEvent[],
+    appId: number,
+  ): TimelineEvent[] {
+    const inactiveIds = new Set(
+      emailsList.filter((e) => !e.linked).map((e) => Number(e.id)),
+    );
+    const filteredEvents = eventsList.filter(
+      (ev) => ev.email_id == null || !inactiveIds.has(ev.email_id),
+    );
+    const linkedEmails = emailsList.filter((e) => e.linked);
+    return buildTimeline(linkedEmails, filteredEvents, appId);
+  }
+
   function recalculateAppLocally(
     app: Application,
     events: ApplicationFieldEvent[],
@@ -370,7 +398,6 @@ export default function DashboardPage() {
     const inactiveEmailIds = new Set(
       emailsList.filter((e) => !e.linked).map((e) => Number(e.id)),
     );
-
     const result: Record<string, unknown> = {};
     const seen = new Set<string>();
 
@@ -385,43 +412,29 @@ export default function DashboardPage() {
       if (seen.has(f)) continue;
       seen.add(f);
 
-      switch (f) {
-        case "status":
-          result.status = ev.value_status ?? null;
-          break;
-        case "location_type":
-          result.location_type = ev.value_location_type ?? null;
-          break;
-        case "location":
-          result.location = ev.value_text ?? null;
-          break;
-        case "contact_person":
-          result.contact_person = ev.value_text ?? null;
-          break;
-        case "date_applied":
-          result.date_applied = ev.value_date ?? null;
-          break;
-        case "notes":
-          result.notes = ev.value_text ?? null;
-          break;
+      const value = extractFieldValue(f, ev);
+      if (f !== "salary_yearly") {
+        result[f] = value ?? null;
       }
     }
 
+    // Default values if no active events exist for these fields
+    const status = (result.status as ApplicationStatus) ?? "applied";
+    const date_applied = (result.date_applied as string) ?? new Date().toISOString().slice(0, 10);
+
     return {
       ...app,
-      status: (result.status as ApplicationStatus) ?? "applied",
+      status,
       compensation_amount: (result.compensation_amount as number | null) ?? null,
       salary_type: (result.salary_type as SalaryType | null) ?? null,
-      location_type:
-        (result.location_type as Application["location_type"]) ?? null,
+      location_type: (result.location_type as Application["location_type"]) ?? null,
       location: (result.location as string | null) ?? null,
       contact_person: (result.contact_person as string | null) ?? null,
-      date_applied: (result.date_applied as string) ?? app.date_applied,
+      date_applied,
       notes: (result.notes as string | null) ?? null,
       updated_at: new Date().toISOString(),
     };
   }
-
   const relatedDataRequestIdRef = useRef(0);
 
   function beginRelatedDataRequest(): number {
@@ -429,8 +442,23 @@ export default function DashboardPage() {
     return relatedDataRequestIdRef.current;
   }
 
-  async function loadRelatedData(app: Application) {
+  async function loadRelatedData(app: Application, forceRefresh: boolean = false) {
     const requestId = beginRelatedDataRequest();
+
+    // check cache first
+    if (!forceRefresh && relatedDataCache[app.id] && relatedDataCache[app.id].timeline.length > 0) {
+      const cached = relatedDataCache[app.id];
+      setEmails(cached.emails);
+      emailsRef.current = cached.emails;
+      setRawEvents(cached.events);
+      rawEventsRef.current = cached.events;
+      setTimeline(cached.timeline);
+      setRelatedDataLoading(false);
+
+      return;
+    }
+
+    setRelatedDataLoading(true);
 
     try {
       const [emailsApiRes, eventsRes] = await Promise.all([
@@ -447,43 +475,49 @@ export default function DashboardPage() {
         eventsRes.json().catch(() => []),
       ]);
 
-      if (requestId !== relatedDataRequestIdRef.current) return;
+      if (requestId !== relatedDataRequestIdRef.current) {
+        return;
+      }
 
       const mappedEmails: ApplicationEmail[] = Array.isArray(emailsData)
         ? emailsData
         : [];
+      const events = Array.isArray(eventsData)
+        ? (eventsData as ApplicationFieldEvent[])
+        : [];
+
+      // update local state
       emailsRef.current = mappedEmails;
       setEmails(mappedEmails);
+      rawEventsRef.current = events;
+      setRawEvents(events);
 
-      if (Array.isArray(eventsData)) {
-        const events = eventsData as ApplicationFieldEvent[];
-        rawEventsRef.current = events;
-        setRawEvents(events);
+      const newTimeline = buildFilteredTimeline(mappedEmails, events, app.application_id);
+      setTimeline(newTimeline);
 
-        const inactiveIds = new Set(
-          mappedEmails.filter((e) => !e.linked).map((e) => Number(e.id)),
-        );
-        const filteredEvents = events.filter(
-          (ev) => ev.email_id == null || !inactiveIds.has(ev.email_id),
-        );
-        const linkedEmails = mappedEmails.filter((e) => e.linked);
-        setTimeline(
-          buildTimeline(linkedEmails, filteredEvents, app.application_id),
-        );
+      // update cache
+      setRelatedDataCache((prev) => ({
+        ...prev,
+        [app.id]: {
+          emails: mappedEmails,
+          events: events,
+          timeline: newTimeline,
+        },
+      }));
+
+      setRelatedDataLoading(false);
+    } catch (err) {
+      if (requestId !== relatedDataRequestIdRef.current) {
+        setRelatedDataLoading(false);
         return;
       }
-
-      rawEventsRef.current = [];
-      setRawEvents([]);
-      setTimeline([]);
-    } catch (err) {
-      if (requestId !== relatedDataRequestIdRef.current) return;
       console.error("Failed to load related data:", err);
       emailsRef.current = [];
       rawEventsRef.current = [];
       setEmails([]);
       setRawEvents([]);
       setTimeline([]);
+      setRelatedDataLoading(false);
     }
   }
 
@@ -512,16 +546,8 @@ export default function DashboardPage() {
       const events = eventsData as ApplicationFieldEvent[];
       setRawEvents(events);
       rawEventsRef.current = events;
-      const currentEmails = emailsRef.current;
-      const inactiveIds = new Set(
-        currentEmails.filter((e) => !e.linked).map((e) => Number(e.id)),
-      );
-      const filteredEvents = events.filter(
-        (ev) => ev.email_id == null || !inactiveIds.has(ev.email_id),
-      );
-      const linkedEmails = currentEmails.filter((e) => e.linked);
       setTimeline(
-        buildTimeline(linkedEmails, filteredEvents, selectedApp.application_id),
+        buildFilteredTimeline(emailsRef.current, events, selectedApp.application_id),
       );
     }
   }
@@ -541,7 +567,9 @@ export default function DashboardPage() {
     user?.email?.split("@")[0] ??
     "User";
   const avatarUrl =
-    user?.user_metadata?.avatar_url ?? user?.user_metadata?.picture;
+    user?.user_metadata?.avatar_url ??
+    user?.user_metadata?.picture ??
+    user?.user_metadata?.image_url;
 
   const filteredApps = applications.filter((app) => {
     const matchesSearch =
@@ -577,16 +605,17 @@ export default function DashboardPage() {
     const app = selectedAppRef.current;
     if (!app) return;
 
-    const inactiveEmailIds = new Set(
-      nextEmails.filter((e) => !e.linked).map((e) => Number(e.id)),
-    );
-    const filteredEvents = events.filter(
-      (ev) => ev.email_id == null || !inactiveEmailIds.has(ev.email_id),
-    );
-    const linkedEmails = nextEmails.filter((e) => e.linked);
-    setTimeline(
-      buildTimeline(linkedEmails, filteredEvents, app.application_id),
-    );
+    const nextTimeline = buildFilteredTimeline(nextEmails, events, app.application_id);
+    setTimeline(nextTimeline);
+
+    setRelatedDataCache((prev) => ({
+      ...prev,
+      [app.id]: {
+        emails: nextEmails,
+        events: events,
+        timeline: nextTimeline,
+      },
+    }));
   }
 
   function handleToggleEmailLink(email: ApplicationEmail) {
@@ -594,17 +623,14 @@ export default function DashboardPage() {
 
     if (toggleCooldownRef.current.has(linkId)) return;
     toggleCooldownRef.current.add(linkId);
-    setTimeout(() => toggleCooldownRef.current.delete(linkId), 600);
+    setTimeout(() => toggleCooldownRef.current.delete(linkId), 350);
 
     const newActive = !email.linked;
-
-    setEmails((prev) => {
-      const next = prev.map((e) =>
-        e.link_id === linkId ? { ...e, linked: newActive } : e,
-      );
-      emailsRef.current = next;
-      return next;
-    });
+    const nextEmails = emails.map((e) =>
+      e.link_id === linkId ? { ...e, linked: newActive } : e,
+    );
+    setEmails(nextEmails);
+    emailsRef.current = nextEmails;
 
     setViewingEmail((prev) =>
       prev?.link_id === linkId ? { ...prev, linked: newActive } : prev,
@@ -613,19 +639,14 @@ export default function DashboardPage() {
     const app = selectedAppRef.current;
     const events = rawEventsRef.current;
     if (app) {
-      const recalculated = recalculateAppLocally(
-        app,
-        events,
-        emailsRef.current,
-      );
+      const recalculated = recalculateAppLocally(app, events, nextEmails);
       setApplications((prev) =>
         prev.map((a) => (a.id === recalculated.id ? recalculated : a)),
       );
       setSelectedApp(recalculated);
       selectedAppRef.current = recalculated;
+      rebuildTimelineFromEmails(nextEmails);
     }
-
-    rebuildTimelineFromEmails(emailsRef.current);
 
     fetch("/api/emails", {
       method: "PATCH",
@@ -693,6 +714,12 @@ export default function DashboardPage() {
     } else {
       setSelectedApp((prev) => (prev?.id === app.id ? null : prev));
     }
+
+    setRelatedDataCache((prev) => {
+      const next = { ...prev };
+      delete next[app.id];
+      return next;
+    });
 
     const res = await fetch(`/api/applications/${app.id}`, {
       method: "DELETE",
@@ -814,6 +841,12 @@ export default function DashboardPage() {
         setSelectedApp(nextSelected);
       }
 
+      setRelatedDataCache((prev) => {
+        const next = { ...prev };
+        idSet.forEach((id) => delete next[id]);
+        return next;
+      });
+
       const results = await Promise.allSettled(
         ids.map(async (id) => {
           const res = await fetch(`/api/applications/${id}`, {
@@ -855,7 +888,7 @@ export default function DashboardPage() {
     setShowDeleteEmailsModal(false);
     setEmailsToDelete([]);
 
-    // Prevent any in-flight related-data fetch from overwriting optimistic UI updates.
+    // prevent any in-flight related-data fetch from overwriting optimistic UI updates
     beginRelatedDataRequest();
 
     const linkIds = toDelete.map((e) => e.link_id);
@@ -884,21 +917,9 @@ export default function DashboardPage() {
 
     const currentApp = selectedAppRef.current;
     const deleteTargetAppId = currentApp?.id ?? null;
-    if (currentApp) {
-      const recalculated = recalculateAppLocally(
-        currentApp,
-        rawEventsRef.current,
-        nextEmails,
-      );
-      setApplications((prev) =>
-        prev.map((a) => (a.id === recalculated.id ? recalculated : a)),
-      );
-      setSelectedApp(recalculated);
-      selectedAppRef.current = recalculated;
-      rebuildTimelineFromEmails(nextEmails);
-    } else {
-      setTimeline([]);
-    }
+
+    // trigger loading immediately to provide visual feedback for the one and only refresh
+    setRelatedDataLoading(true);
 
     fetch("/api/emails", {
       method: "DELETE",
@@ -929,14 +950,14 @@ export default function DashboardPage() {
         const app = selectedAppRef.current;
         if (!app || deleteTargetAppId == null || app.id !== deleteTargetAppId)
           return;
-        return loadRelatedData(app);
+        return loadRelatedData(app, true);
       })
       .catch((err) => {
         console.error("Failed to delete emails:", err);
         const app = selectedAppRef.current;
         if (!app || deleteTargetAppId == null || app.id !== deleteTargetAppId)
           return;
-        loadRelatedData(app);
+        loadRelatedData(app, true);
       });
   }
 
@@ -984,7 +1005,7 @@ export default function DashboardPage() {
             ease: "easeInOut",
             type: "spring",
           }}
-          className={`${styles.popup} ${showNewModal || showDeleteModal || showDeleteEmailsModal || showBulkDeleteApplicationsModal ? styles.popupBehindModal : ""}`}
+          className={`${styles.popup} ${showNewModal || showDeleteModal || showDeleteEmailsModal || showScanModal || showBulkDeleteApplicationsModal ? styles.popupBehindModal : ""}`}
         >
           <header className={styles.header}>
             <div className={styles.brandArea}>
@@ -1003,6 +1024,14 @@ export default function DashboardPage() {
             </div>
 
             <div className={styles.userArea}>
+              <button
+                type="button"
+                className={styles.scanBtn}
+                onClick={() => setShowScanModal(true)}
+              >
+                <Mail size={14} />
+                Scan Emails
+              </button>
               {avatarUrl ? (
                 <img
                   src={avatarUrl}
@@ -1010,6 +1039,7 @@ export default function DashboardPage() {
                   className={styles.userAvatar}
                   width={32}
                   height={32}
+                  referrerPolicy="no-referrer"
                 />
               ) : (
                 <span
@@ -1071,6 +1101,7 @@ export default function DashboardPage() {
                   key={selectedApp?.id ?? "empty-application"}
                   application={selectedApp}
                   emails={emails}
+                  isLoading={relatedDataLoading}
                   onApplicationUpdated={handleApplicationUpdated}
                   onEventsChange={refetchEvents}
                   onDeleteClick={() => setShowDeleteModal(true)}
@@ -1083,7 +1114,11 @@ export default function DashboardPage() {
               <Separator className={styles.resizeHandle} />
 
               <Panel id="sidebar" defaultSize="30%" minSize="20%" maxSize="40%">
-                <EmailsTimeline timeline={timeline} />
+                <EmailsTimeline 
+                  applicationId={selectedApp?.id ?? ""}
+                  timeline={timeline} 
+                  isLoading={relatedDataLoading} 
+                />
               </Panel>
             </Group>
           </div>
@@ -1231,10 +1266,30 @@ export default function DashboardPage() {
         </DialogContent>
       </Dialog>
 
-      <EmailViewerModal
-        email={viewingEmail}
-        onClose={() => setViewingEmail(null)}
-        onToggleLink={handleToggleEmailLink}
+      <AnimatePresence>
+        {viewingEmail && (
+          <EmailViewerModal
+            email={viewingEmail}
+            onClose={() => setViewingEmail(null)}
+            onToggleLink={handleToggleEmailLink}
+          />
+        )}
+      </AnimatePresence>
+
+      <ScanEmailsModal
+        open={showScanModal}
+        onOpenChange={setShowScanModal}
+        onScanComplete={async () => {
+          // invalidate cache since scan might have affected any application
+          setRelatedDataCache({});
+          const nextApps = await refetchApplications();
+          // refresh related data for the currently selected app
+          const currentId = selectedAppRef.current?.id;
+          const app = (currentId && nextApps) ? nextApps.find((a: Application) => a.id === currentId) : null;
+          if (app) {
+            await loadRelatedData(app, true);
+          }
+        }}
       />
     </div>
   );

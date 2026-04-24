@@ -8,7 +8,9 @@ import type { TimelineEvent } from "@/types/applications";
 import styles from "../dashboard.module.css";
 
 interface EmailsTimelineProps {
+  applicationId: number | string;
   timeline: TimelineEvent[];
+  isLoading?: boolean;
 }
 
 const EVENT_CONFIG: Record<
@@ -393,7 +395,9 @@ function GroupedEntry({
 }
 
 export default function EmailsTimeline({
+  applicationId,
   timeline,
+  isLoading = false,
 }: EmailsTimelineProps) {
   const groups = groupTimelineEvents(timeline);
 
@@ -403,48 +407,58 @@ export default function EmailsTimeline({
         <section className={styles.timelineSection}>
           <h3 className={styles.sectionTitle}>Timeline</h3>
 
-          <div className={styles.timelineList}>
-            <AnimatePresence initial={false} mode="popLayout">
-              {groups.map((group, i) => {
-                const showLine = i < groups.length - 1;
+            <div className={styles.timelineList}>
+              <AnimatePresence mode="popLayout" initial={false}>
+                {groups.map((group, i) => {
+                  const showLine = i < groups.length - 1;
 
-                return (
-                  <motion.div
-                    key={group.id}
-                    layout
-                    initial={{ opacity: 0, y: 10, scale: 0.97, filter: "blur(4px)" }}
-                    animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-                    exit={{ opacity: 0, scale: 0.95, filter: "blur(4px)", height: 0, marginBottom: 0, overflow: "hidden" }}
-                    transition={{
-                      duration: 0.3,
-                      ease: [0.25, 0.1, 0.25, 1],
-                      layout: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] },
-                    }}
+                  return (
+                    <motion.div
+                      key={`${applicationId}-${group.id}`}
+                      layout
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{
+                        duration: 0.2,
+                        delay: i * 0.02,
+                        ease: [0.25, 0.1, 0.25, 1],
+                      }}
+                    >
+                      {group.events.length === 1 && !group.email_subject ? (
+                        <SingleEvent
+                          event={group.events[0]}
+                          showLine={showLine}
+                        />
+                      ) : (
+                        <GroupedEntry group={group} showLine={showLine} />
+                      )}
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
+
+              {timeline.length === 0 && !isLoading && (
+                <motion.p
+                  className={styles.emptyHint}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.2 }}
+                >
+                  No timeline events yet.
+                </motion.p>
+              )}
+
+              {isLoading && (
+                <div className={styles.timelineLoading}>
+                  <motion.span
+                    animate={{ opacity: [0.4, 1, 0.4] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
                   >
-                    {group.events.length === 1 && !group.email_subject ? (
-                      <SingleEvent
-                        event={group.events[0]}
-                        showLine={showLine}
-                      />
-                    ) : (
-                      <GroupedEntry group={group} showLine={showLine} />
-                    )}
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
-
-            {timeline.length === 0 && (
-              <motion.p
-                className={styles.emptyHint}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.2 }}
-              >
-                No timeline events yet.
-              </motion.p>
-            )}
-          </div>
+                    Fetching updates...
+                  </motion.span>
+                </div>
+              )}
+            </div>
         </section>
       </div>
     </ScrollArea>
