@@ -48,6 +48,8 @@ import {
 import styles from "./dashboard.module.css";
 
 const FIELD_LABELS: Record<string, string> = {
+  compensation_amount: "Compensation",
+  salary_type: "Salary type",
   salary_per_hour: "Salary / hour",
   salary_yearly: "Salary (yearly)",
   location_type: "Location type",
@@ -401,9 +403,21 @@ export default function DashboardPage() {
     const result: Record<string, unknown> = {};
     const seen = new Set<string>();
 
-    for (const ev of events) {
+    const sourcePriority: Record<string, number> = { email: 3, scrape: 2, manual: 1 };
+    const sorted = [...events].sort((a, b) => {
+      const timeA = new Date(a.event_time ?? a.created_at).getTime();
+      const timeB = new Date(b.event_time ?? b.created_at).getTime();
+      if (timeA !== timeB) return timeB - timeA;
+      const prioA = sourcePriority[a.source_type as string] ?? 0;
+      const prioB = sourcePriority[b.source_type as string] ?? 0;
+      return prioB - prioA;
+    });
+
+    for (const ev of sorted) {
       const f = ev.field_name;
       if (ev.email_id != null && inactiveEmailIds.has(ev.email_id)) continue;
+
+      if (f === "notes" && ev.source_type === "email") continue;
 
       if (applyCompensationEventLocally(f, ev, result, seen)) {
         continue;
@@ -546,9 +560,26 @@ export default function DashboardPage() {
       const events = eventsData as ApplicationFieldEvent[];
       setRawEvents(events);
       rawEventsRef.current = events;
-      setTimeline(
-        buildFilteredTimeline(emailsRef.current, events, selectedApp.application_id),
+      
+      const newTimeline = buildFilteredTimeline(emailsRef.current, events, selectedApp.application_id);
+      setTimeline(newTimeline);
+
+      // Recalculate the application state based on the new event timeline
+      const recalculated = recalculateAppLocally(selectedApp, events, emailsRef.current);
+      setSelectedApp(recalculated);
+      setApplications((prev) =>
+        prev.map((a) => (a.id === recalculated.id ? recalculated : a)),
       );
+
+      // Update cache
+      setRelatedDataCache((prev) => ({
+        ...prev,
+        [selectedApp.id]: {
+          emails: emailsRef.current,
+          events: events,
+          timeline: newTimeline,
+        },
+      }));
     }
   }
 
@@ -1101,6 +1132,7 @@ export default function DashboardPage() {
                   key={selectedApp?.id ?? "empty-application"}
                   application={selectedApp}
                   emails={emails}
+                  events={rawEvents}
                   isLoading={relatedDataLoading}
                   onApplicationUpdated={handleApplicationUpdated}
                   onEventsChange={refetchEvents}

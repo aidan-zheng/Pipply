@@ -49,13 +49,25 @@ export async function recalculateApplication(
   const { data: allEvents } = await admin
     .from("application_field_events")
     .select("*")
-    .eq("application_id", applicationId)
-    .order("event_time", { ascending: false });
+    .eq("application_id", applicationId);
 
   const recalculated: Record<string, unknown> = {};
   const seenFields = new Set<string>();
 
-  for (const event of allEvents ?? []) {
+  // Sort by event_time (latest first) with source priority as tie-breaker
+  const sourcePriority: Record<string, number> = { email: 3, scrape: 2, manual: 1 };
+  const sortedEvents = (allEvents ?? []).sort((a, b) => {
+    const timeA = new Date(a.event_time).getTime();
+    const timeB = new Date(b.event_time).getTime();
+
+    if (timeA !== timeB) return timeB - timeA;
+
+    const prioA = sourcePriority[a.source_type as string] ?? 0;
+    const prioB = sourcePriority[b.source_type as string] ?? 0;
+    return prioB - prioA;
+  });
+
+  for (const event of sortedEvents) {
     const fieldName = event.field_name as string;
     if (event.email_id != null && excludeEmailIds.has(event.email_id)) continue;
     const value = extractFieldValue(fieldName, event);
@@ -88,6 +100,8 @@ export async function recalculateApplication(
       }
       continue;
     }
+
+    if (fieldName === "notes" && event.source_type === "email") continue;
 
     if (seenFields.has(fieldName)) continue;
     seenFields.add(fieldName);
@@ -149,25 +163,27 @@ export function buildFieldEvents(
       confidence,
     });
   }
-  if (parsed.salary_per_hour != null) {
+  if (parsed.compensation_amount != null) {
     events.push({
       application_id: applicationId,
       source_type: "email",
       email_id: emailId,
       field_name: "compensation_amount",
-      value_number: parsed.salary_per_hour,
+      value_number: parsed.compensation_amount,
       event_time: eventTime,
       confidence,
     });
-    events.push({
-      application_id: applicationId,
-      source_type: "email",
-      email_id: emailId,
-      field_name: "salary_type",
-      value_text: "hourly",
-      event_time: eventTime,
-      confidence,
-    });
+    if (parsed.salary_type != null) {
+      events.push({
+        application_id: applicationId,
+        source_type: "email",
+        email_id: emailId,
+        field_name: "salary_type",
+        value_text: parsed.salary_type,
+        event_time: eventTime,
+        confidence,
+      });
+    }
   }
   if (parsed.location_type) {
     events.push({

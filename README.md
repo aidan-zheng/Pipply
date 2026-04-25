@@ -59,6 +59,7 @@ npm run dev
 - Timeline-backed field event history
 - Gmail scanning with relevance filtering and body parsing
 - Three-panel dashboard with linked-email controls and bulk actions
+- Side-by-side Notes & Events UI with smart scroll stabilization
 
 ## API Overview
 

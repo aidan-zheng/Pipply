@@ -19,12 +19,15 @@ const HEADER_MODELS = [
   "llama-3.1-8b-instant"
 ];
 
-let currentBodyModelIdx = 0;
-let currentHeaderModelIdx = 0;
-let currentKeyIdx = 0;
+class GroqApiError extends Error {
+  status: number;
+  constructor(status: number, body: string) {
+    super(`Groq API error ${status}: ${body}`);
+    this.status = status;
+  }
+}
 
-// rotates through all available GROQ_API_KEY* env variables.
-function getNextApiKey(): string {
+function getApiKeys(): string[] {
   const keys = Object.keys(process.env)
     .filter((k) => k.startsWith("GROQ_API_KEY"))
     .sort()
@@ -35,9 +38,7 @@ function getNextApiKey(): string {
     throw new Error("Missing GROQ_API_KEY environment variable(s)");
   }
 
-  const key = keys[currentKeyIdx % keys.length];
-  currentKeyIdx++;
-  return key;
+  return keys;
 }
 
 interface GroqMessage {
@@ -45,9 +46,7 @@ interface GroqMessage {
   content: string;
 }
 
-async function callGroq(messages: GroqMessage[], model: string): Promise<string> {
-  const apiKey = getNextApiKey();
-
+async function callGroq(messages: GroqMessage[], model: string, apiKey: string): Promise<string> {
   const res = await fetch(GROQ_API_URL, {
     method: "POST",
     headers: {
@@ -65,7 +64,7 @@ async function callGroq(messages: GroqMessage[], model: string): Promise<string>
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Groq API error ${res.status}: ${text}`);
+    throw new GroqApiError(res.status, text);
   }
 
   const data = await res.json();
@@ -76,41 +75,42 @@ const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
 async function callGroqWithRetry(messages: GroqMessage[], type: "body" | "header"): Promise<string> {
   const models = type === "body" ? BODY_MODELS : HEADER_MODELS;
-  let currentIdx = type === "body" ? currentBodyModelIdx : currentHeaderModelIdx;
-
+  const keys = getApiKeys();
   const MAX_CYCLES = 10;
 
   for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
-    let allModelsRateLimited = true;
+    let anyRateLimited = false;
 
-    for (let attempt = 0; attempt < models.length; attempt++) {
-      const model = models[currentIdx];
-      try {
-        return await callGroq(messages, model);
-      } catch (err: any) {
-        const isRateLimit = err.message.includes("429") || err.message.includes("rate limit");
-        const isSkippable = err.message.includes("400") || err.message.includes("404");
+    for (const model of models) {
+      let modelUnavailable = false;
 
-        if (isRateLimit || isSkippable) {
-          if (!isRateLimit) allModelsRateLimited = false;
-
-          console.warn(`[LLM Parser] Option ${model} failed (${err.message}), falling back to next...`);
-          currentIdx = (currentIdx + 1) % models.length;
-
-          if (type === "body") currentBodyModelIdx = currentIdx;
-          else currentHeaderModelIdx = currentIdx;
-          continue;
+      for (const key of keys) {
+        try {
+          return await callGroq(messages, model, key);
+        } catch (err) {
+          if (err instanceof GroqApiError) {
+            if (err.status === 429) {
+              anyRateLimited = true;
+              console.warn(`[LLM] ${model} rate limited, trying next key...`);
+              continue;
+            }
+            if (err.status === 400 || err.status === 404) {
+              console.warn(`[LLM] ${model} unavailable (${err.status}), skipping model...`);
+              modelUnavailable = true;
+              break;
+            }
+          }
+          throw err;
         }
-        throw err;
       }
+
+      if (modelUnavailable) continue;
     }
 
-    if (allModelsRateLimited) {
-      console.warn(`[LLM Parser] All ${type} models rate limited. Cycle ${cycle + 1}/${MAX_CYCLES} complete. Waiting 2s...`);
-      await sleep(2000);
-    } else {
-      break;
-    }
+    if (!anyRateLimited) break;
+
+    console.warn(`[LLM] All ${type} models rate limited. Cycle ${cycle + 1}/${MAX_CYCLES}. Waiting 2s...`);
+    await sleep(2000);
   }
 
   throw new Error(`All ${type} Groq models exhausted or unavailable after ${MAX_CYCLES} retry cycles.`);
@@ -208,7 +208,8 @@ ${emailList}`;
 
 export interface ParsedEmailUpdate {
   status: string | null;
-  salary_per_hour: number | null;
+  compensation_amount: number | null;
+  salary_type: string | null;
   location_type: string | null;
   location: string | null;
   contact_person: string | null;
@@ -224,7 +225,13 @@ export async function parseEmailBody(
   subject: string,
   sender: string,
   body: string,
-  currentApplication: { company_name: string; job_title: string; status: string; contact_person?: string | null },
+  currentApplication: {
+    company_name: string;
+    job_title: string;
+    status: string;
+    contact_person?: string | null;
+    notes?: string | null;
+  },
 ): Promise<ParsedEmailUpdate> {
   // Truncate very long bodies to avoid token limits
   const truncatedBody = body.length > 4000 ? body.slice(0, 4000) + "\n[...truncated]" : body;
@@ -234,12 +241,12 @@ Given an email about a job application, extract any field updates.
 
 Return ONLY a JSON object with these fields (set to null if not mentioned/changed):
 - "status": one of "draft", "applied", "interviewing", "offer", "rejected", "withdrawn", "ghosted" — or null if no status change detected
-- "salary_per_hour": number or null — hourly rate if mentioned
+- "compensation_amount": number or null — the compensation value if mentioned
+- "salary_type": one of "hourly", "weekly", "biweekly", "monthly", "yearly" — or null if no compensation is mentioned
 - "location_type": one of "remote", "hybrid", "on_site" — or null
 - "location": string or null — city/office location if mentioned
 - "contact_person": string or null — recruiter or hiring manager name. ONLY extract this if a person explicitly introduces themselves or signs off in the email body. DO NOT guess it from the sender email address.
-- "notes": string or null — any other important details worth noting (interview date/time, next steps, etc.). Keep this brief.
-- "confidence": "high" | "medium" | "low" — overall confidence in extracted data
+- "notes": string or null — any other important details worth noting (interview date/time, next steps, etc.). Keep this concise (1-2 lines). 
 
 Rules:
 - CRITICAL: If the email is clearly focused on a different company than "${currentApplication.company_name}", you MUST assume this email is irrelevant and return null for ALL fields to prevent false positive updates.
@@ -277,7 +284,8 @@ ${truncatedBody}`;
 
     return {
       status: parsed.status ? parsed.status.toLowerCase() : null,
-      salary_per_hour: parsed.salary_per_hour != null ? Number(parsed.salary_per_hour) : null,
+      compensation_amount: parsed.compensation_amount != null ? Number(parsed.compensation_amount) : null,
+      salary_type: parsed.salary_type ? parsed.salary_type.toLowerCase() : null,
       location_type: parsed.location_type ? parsed.location_type.toLowerCase() : null,
       location: parsed.location ?? null,
       contact_person: contact_person,
@@ -288,7 +296,8 @@ ${truncatedBody}`;
     console.error(`[Stage 2] Failed to parse LLM JSON:`, err, "\nRaw output:", raw);
     return {
       status: null,
-      salary_per_hour: null,
+      compensation_amount: null,
+      salary_type: null,
       location_type: null,
       location: null,
       contact_person: null,

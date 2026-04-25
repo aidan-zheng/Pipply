@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, Mail, Loader2, Trash2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,6 +27,7 @@ import type {
   ApplicationStatus,
   LocationType,
   SalaryType,
+  ApplicationFieldEvent,
 } from "@/types/applications";
 import {
   STATUS_LABELS,
@@ -98,6 +99,7 @@ interface ApplicationDetailsProps {
   onToggleEmailLink: (email: ApplicationEmail) => void;
   onEmailClick: (email: ApplicationEmail) => void;
   onDeleteEmails: (emails: ApplicationEmail[]) => void;
+  events?: ApplicationFieldEvent[];
 }
 
 export default function ApplicationDetails({
@@ -110,6 +112,7 @@ export default function ApplicationDetails({
   onToggleEmailLink,
   onEmailClick,
   onDeleteEmails,
+  events = [],
 }: ApplicationDetailsProps) {
   const [editingField, setEditingField] = useState<ApplicationFieldName | null>(
     null,
@@ -119,6 +122,40 @@ export default function ApplicationDetails({
   const [optimisticApp, setOptimisticApp] = useState<Application | null>(null);
   const [selectedEmailIds, setSelectedEmailIds] = useState<Set<number>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
+  const [editingEmailNote, setEditingEmailNote] = useState<number | null>(null);
+  const [emailNoteEditValue, setEmailNoteEditValue] = useState("");
+  const [savingEmailNote, setSavingEmailNote] = useState(false);
+  const emailsContainerRef = useRef<HTMLDivElement>(null);
+  const prevEmailsOffsetTop = useRef<number | null>(null);
+  const isTogglingEmail = useRef(false);
+
+  useLayoutEffect(() => {
+    if (emailsContainerRef.current) {
+      const currentOffsetTop = emailsContainerRef.current.offsetTop;
+
+      // auto scroll on email toggle only
+      if (!isTogglingEmail.current) {
+        prevEmailsOffsetTop.current = currentOffsetTop;
+        return;
+      }
+
+      if (prevEmailsOffsetTop.current !== null && currentOffsetTop !== prevEmailsOffsetTop.current) {
+        const diff = currentOffsetTop - prevEmailsOffsetTop.current;
+        const scrollViewport = emailsContainerRef.current.closest('[data-slot="scroll-area-viewport"]');
+
+        if (scrollViewport) {
+          const rect = emailsContainerRef.current.getBoundingClientRect();
+          const viewportRect = scrollViewport.getBoundingClientRect();
+
+          if (rect.top < viewportRect.bottom + 200) {
+            scrollViewport.scrollTop += diff;
+          }
+        }
+      }
+      prevEmailsOffsetTop.current = currentOffsetTop;
+      isTogglingEmail.current = false;
+    }
+  });
 
   useEffect(() => {
     setOptimisticApp(null);
@@ -126,6 +163,8 @@ export default function ApplicationDetails({
     setEditValue("");
     setSelectedEmailIds(new Set());
     setSelectMode(false);
+    setEditingEmailNote(null);
+    setEmailNoteEditValue("");
   }, [application?.id]);
 
   useEffect(() => {
@@ -163,6 +202,30 @@ export default function ApplicationDetails({
     }
   }
 
+  async function handleSaveEmailNote(eventId: number) {
+    if (savingEmailNote) return;
+    setSavingEmailNote(true);
+    try {
+      const res = await fetch(`/api/application-events/${eventId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ value_text: emailNoteEditValue }),
+      });
+      if (res.ok) {
+        onEventsChange();
+        setEditingEmailNote(null);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        alert(`Failed to save note: ${body?.error || res.statusText}`);
+      }
+    } catch (err) {
+      alert("Failed to save note. Check console.");
+      console.error(err);
+    }
+    setSavingEmailNote(false);
+  }
+
   if (!application) {
     return (
       <div className={styles.detailsPanel}>
@@ -174,6 +237,11 @@ export default function ApplicationDetails({
   }
 
   const app = optimisticApp ?? application;
+
+  function handleLocalEmailToggle(email: ApplicationEmail) {
+    isTogglingEmail.current = true;
+    onToggleEmailLink(email);
+  }
 
   async function handleSave(field_name: ApplicationFieldName) {
     if (!application || saving) return;
@@ -274,47 +342,41 @@ export default function ApplicationDetails({
     isEmpty?: boolean;
     isStatus?: boolean;
   }[] = [
-    {
-      label: getCompensationFieldLabel(app.salary_type),
-      value: formatCompensation(app.compensation_amount, app.salary_type),
-      fieldName: "compensation_amount",
-      label2: "Salary Type",
-      value2: app.salary_type ? SALARY_TYPE_LABELS[app.salary_type] : "N/A",
-      fieldName2: "salary_type",
-    },
-    {
-      label: "Location Type",
-      value: app.location_type ? LOCATION_LABELS[app.location_type] : "N/A",
-      fieldName: "location_type",
-      label2: "Location",
-      value2: app.location || "N/A",
-      fieldName2: "location",
-    },
-    {
-      label: "Contact Person",
-      value: app.contact_person || "N/A",
-      fieldName: "contact_person",
-      label2: "Date Applied",
-      value2: formatDateOnly(app.date_applied, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-      fieldName2: "date_applied",
-    },
-    {
-      label: "Status",
-      value: STATUS_LABELS[app.status],
-      fieldName: "status",
-      isStatus: true,
-    },
-    {
-      label: "Notes",
-      value: app.notes || "",
-      isEmpty: !app.notes,
-      fieldName: "notes",
-    },
-  ];
+      {
+        label: getCompensationFieldLabel(app.salary_type),
+        value: formatCompensation(app.compensation_amount, app.salary_type),
+        fieldName: "compensation_amount",
+        label2: "Salary Type",
+        value2: app.salary_type ? SALARY_TYPE_LABELS[app.salary_type] : "N/A",
+        fieldName2: "salary_type",
+      },
+      {
+        label: "Location Type",
+        value: app.location_type ? LOCATION_LABELS[app.location_type] : "N/A",
+        fieldName: "location_type",
+        label2: "Location",
+        value2: app.location || "N/A",
+        fieldName2: "location",
+      },
+      {
+        label: "Contact Person",
+        value: app.contact_person || "N/A",
+        fieldName: "contact_person",
+        label2: "Date Applied",
+        value2: formatDateOnly(app.date_applied, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        }),
+        fieldName2: "date_applied",
+      },
+      {
+        label: "Status",
+        value: STATUS_LABELS[app.status],
+        fieldName: "status",
+        isStatus: true,
+      },
+    ];
 
   const sortedEmails = [...emails].sort((a, b) => (a.linked === b.linked ? 0 : a.linked ? -1 : 1));
 
@@ -328,37 +390,26 @@ export default function ApplicationDetails({
     if (fieldName === "notes") {
       if (isEditing) {
         return (
-          <div className={styles.fieldEditWrap}>
+          <div className={styles.fieldEditWrap} style={{ width: "100%", display: "flex", flexDirection: "column" }}>
             <textarea
               className={styles.fieldInput}
               value={editValue}
               onChange={(e) =>
                 setEditValue(getLimitedTextValue("notes", e.target.value))
               }
-              rows={3}
+              rows={6}
+              style={{ width: "100%", resize: "vertical" }}
               autoFocus
               maxLength={APPLICATION_TEXT_LIMITS.notes}
             />
-            <CharacterHint
-              current={editValue.length}
-              limit={APPLICATION_TEXT_LIMITS.notes}
-            />
-            <button
-              type="button"
-              className={styles.fieldCancelBtn}
-              onClick={cancelEdit}
-              disabled={saving}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className={styles.fieldSaveBtn}
-              onClick={() => handleSave("notes")}
-              disabled={saving}
-            >
-              {saving ? <Loader2 size={14} className="animate-spin" /> : "Save"}
-            </button>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end", width: "100%", alignItems: "center" }}>
+              <CharacterHint current={editValue.length} limit={APPLICATION_TEXT_LIMITS.notes} />
+              <div style={{ flex: 1 }} />
+              <button type="button" className={styles.fieldCancelBtn} onClick={cancelEdit} disabled={saving}>Cancel</button>
+              <button type="button" className={styles.fieldSaveBtn} onClick={() => handleSave("notes")} disabled={saving}>
+                {saving ? <Loader2 size={14} className="animate-spin" /> : "Save"}
+              </button>
+            </div>
           </div>
         );
       }
@@ -426,17 +477,17 @@ export default function ApplicationDetails({
               <option value="">N/A</option>
               {fieldName === "location_type"
                 ? (Object.entries(LOCATION_LABELS) as [LocationType, string][]).map(
-                    ([k, v]) => (
-                      <option key={k} value={k}>
-                        {v}
-                      </option>
-                    ),
-                  )
-                : SALARY_TYPES.map((salaryType) => (
-                    <option key={salaryType} value={salaryType}>
-                      {SALARY_TYPE_LABELS[salaryType]}
+                  ([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
                     </option>
-                  ))}
+                  ),
+                )
+                : SALARY_TYPES.map((salaryType) => (
+                  <option key={salaryType} value={salaryType}>
+                    {SALARY_TYPE_LABELS[salaryType]}
+                  </option>
+                ))}
             </select>
             <button
               type="button"
@@ -717,9 +768,95 @@ export default function ApplicationDetails({
               </div>
             </div>
           ))}
+
+          <div className={styles.detailField} style={{ borderBottom: "none", paddingBottom: 0 }}>
+            <span className={styles.fieldLabel} style={{ display: "block", marginBottom: 8 }}>Notes & Events</span>
+            <div style={{ display: "flex", alignItems: "stretch", gap: "24px", maxHeight: "350px" }}>
+
+              <div style={{ flex: 1, borderRight: "1px solid var(--jobsync-border)", paddingRight: "24px", display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <span className={styles.fieldLabel} style={{ margin: 0 }}>Manual Notes</span>
+                  {editingField !== "notes" && (
+                    <button type="button" className={styles.editBtn} onClick={() => startEdit("notes", app.notes || "")} style={{ padding: "0 6px", fontSize: "0.72rem" }}>Edit</button>
+                  )}
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+                  <div className={styles.fieldValueRow} style={{ flex: 1, alignItems: "stretch", width: "100%", padding: "4px" }}>
+                    {renderEditOrValue("notes", app.notes || "", !app.notes)}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <span className={styles.fieldLabel} style={{ marginBottom: 12 }}>Email Event Log</span>
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 16, paddingRight: 8, paddingLeft: 4, paddingTop: 4, paddingBottom: 4 }}>
+                    {emails.some(e => e.linked) && events.some(ev => ev.field_name === "notes" && ev.source_type === "email" && ev.value_text) ? (
+                      [...emails].filter(e => e.linked).sort((a, b) => new Date(a.received_date).getTime() - new Date(b.received_date).getTime()).map((email, index, arr) => {
+                        const noteEvent = events.find(ev => ev.email_id === Number(email.id) && ev.field_name === "notes" && ev.value_text);
+                        if (!noteEvent) return null;
+
+                        const isEditing = editingEmailNote === noteEvent.id;
+                        const isLast = index === arr.length - 1;
+                        const eventDate = email.received_date ? new Date(email.received_date) : null;
+                        const dateString = eventDate ? `${eventDate.getMonth() + 1}/${eventDate.getDate()}` : "";
+                        const displaySubject = email.subject.length > 35 ? email.subject.substring(0, 35) + "..." : email.subject;
+
+                        return (
+                          <div key={`note-${noteEvent.id}`} style={{ display: "flex", flexDirection: "column", paddingBottom: isEditing ? 0 : "12px", borderBottom: isEditing || isLast ? "none" : "1px solid var(--jobsync-border)" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                              <span style={{ flex: 1, minWidth: 0, fontSize: "0.72rem", color: "var(--jobsync-text-muted)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }} title={`Note from: ${email.subject}`}>
+                                From: {displaySubject}
+                              </span>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                                {dateString && (
+                                  <span style={{ fontSize: "0.72rem", color: "var(--jobsync-text-muted)", fontWeight: 500 }}>
+                                    {dateString}
+                                  </span>
+                                )}
+                                {!isEditing && (
+                                  <button type="button" className={styles.editBtn} onClick={() => { setEditingEmailNote(noteEvent.id); setEmailNoteEditValue(noteEvent.value_text || ""); }} style={{ padding: "0 4px", fontSize: "0.72rem" }}>Edit</button>
+                                )}
+                              </div>
+                            </div>
+                            {isEditing ? (
+                              <div className={styles.fieldEditWrap} style={{ width: "100%", marginTop: 0 }}>
+                                <textarea
+                                  className={styles.fieldInput}
+                                  value={emailNoteEditValue}
+                                  onChange={(e) => setEmailNoteEditValue(getLimitedTextValue("notes", e.target.value))}
+                                  rows={5}
+                                  style={{ minHeight: "120px", resize: "vertical", width: "100%" }}
+                                  autoFocus
+                                  maxLength={APPLICATION_TEXT_LIMITS.notes}
+                                />
+                                <div style={{ display: "flex", gap: 8, marginTop: 4, width: "100%", justifyContent: "flex-end" }}>
+                                  <button type="button" className={styles.fieldCancelBtn} onClick={() => setEditingEmailNote(null)} disabled={savingEmailNote} style={{ fontSize: "0.72rem" }}>Cancel</button>
+                                  <button type="button" className={styles.fieldSaveBtn} onClick={() => handleSaveEmailNote(noteEvent.id)} disabled={savingEmailNote} style={{ fontSize: "0.72rem", padding: "4px 8px" }}>
+                                    {savingEmailNote ? <Loader2 size={12} className="animate-spin" /> : "Save"}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className={styles.fieldValue} style={{ whiteSpace: "pre-wrap", width: "100%", fontSize: "0.8rem", color: "var(--jobsync-text)", flex: "none" }}>
+                                {noteEvent.value_text}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <span className={styles.fieldEmpty} style={{ fontSize: "0.8rem" }}>No email events found.</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
         </div>
 
-        <div className={styles.emailsForApp}>
+        <div className={styles.emailsForApp} ref={emailsContainerRef}>
           <div className={styles.emailsSectionHeader}>
             <h3 className={styles.sectionTitle}>Related emails</h3>
             {emails.length > 0 && (
@@ -816,7 +953,7 @@ export default function ApplicationDetails({
                     className={`${styles.emailLinkToggle} ${email.linked ? styles.emailLinkToggleActive : ""}`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onToggleEmailLink(email);
+                      handleLocalEmailToggle(email);
                     }}
                     title={email.linked ? "Unlink email" : "Link email"}
                   >
