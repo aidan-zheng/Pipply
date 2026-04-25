@@ -101,6 +101,8 @@ export async function recalculateApplication(
       continue;
     }
 
+    if (fieldName === "notes" && event.source_type === "email") continue;
+
     if (seenFields.has(fieldName)) continue;
     seenFields.add(fieldName);
     recalculated[fieldName] = value;

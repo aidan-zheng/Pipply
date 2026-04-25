@@ -224,10 +224,10 @@ export async function parseEmailBody(
   subject: string,
   sender: string,
   body: string,
-  currentApplication: { 
-    company_name: string; 
-    job_title: string; 
-    status: string; 
+  currentApplication: {
+    company_name: string;
+    job_title: string;
+    status: string;
     contact_person?: string | null;
     notes?: string | null;
   },
@@ -244,8 +244,7 @@ Return ONLY a JSON object with these fields (set to null if not mentioned/change
 - "location_type": one of "remote", "hybrid", "on_site" — or null
 - "location": string or null — city/office location if mentioned
 - "contact_person": string or null — recruiter or hiring manager name. ONLY extract this if a person explicitly introduces themselves or signs off in the email body. DO NOT guess it from the sender email address.
-- "notes": string or null — any other important details worth noting (interview date/time, next steps, etc.). Keep this brief.
-- "confidence": "high" | "medium" | "low" — overall confidence in extracted data
+- "notes": string or null — any other important details worth noting (interview date/time, next steps, etc.). Keep this concise (1-2 lines). 
 
 Rules:
 - CRITICAL: If the email is clearly focused on a different company than "${currentApplication.company_name}", you MUST assume this email is irrelevant and return null for ALL fields to prevent false positive updates.

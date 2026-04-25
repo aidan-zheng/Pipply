@@ -415,6 +415,8 @@ export default function DashboardPage() {
       const f = ev.field_name;
       if (ev.email_id != null && inactiveEmailIds.has(ev.email_id)) continue;
 
+      if (f === "notes" && ev.source_type === "email") continue;
+
       if (applyCompensationEventLocally(f, ev, result, seen)) {
         continue;
       }
@@ -1128,6 +1130,7 @@ export default function DashboardPage() {
                   key={selectedApp?.id ?? "empty-application"}
                   application={selectedApp}
                   emails={emails}
+                  events={rawEvents}
                   isLoading={relatedDataLoading}
                   onApplicationUpdated={handleApplicationUpdated}
                   onEventsChange={refetchEvents}
